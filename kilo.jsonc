@@ -1,0 +1,32 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+
+  // Change models here — all agents configured in one place
+  "model": "deepseek/deepseek-v4-pro",
+  "small_model": "deepseek/deepseek-v4-flash",
+
+  // Persistent instructions loaded every session. AGENTS.md is auto-loaded by Kilo — only rules need explicit paths.
+  "instructions": [
+    ".kilo/rules/00-conventions.md",
+    ".kilo/rules/10-workflow.md",
+    ".kilo/rules/20-mcp-conventions.md"
+  ],
+
+  // Agent models — explicit per-agent to prevent subagent inheritance bugs
+  "agent": {
+    "plan":       { "model": "deepseek/deepseek-v4-pro" },
+    "ask":        { "model": "deepseek/deepseek-v4-flash" },
+    "reviewer":   { "model": "deepseek/deepseek-v4-pro" },
+    "worker":     { "model": "deepseek/deepseek-v4-flash" },
+    "compaction": { "model": "deepseek/deepseek-v4-flash" },
+    "explore":    { "model": "deepseek/deepseek-v4-flash" }
+  },
+
+  // Permissions — bash is allowed for running lint, tests, and build commands
+  "permission": {
+    "bash": "allow"
+  },
+
+  // Git snapshots before each agent action for easy rollback
+  "snapshot": true
+}

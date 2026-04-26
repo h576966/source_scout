@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Swift
+.build/
+DerivedData/
+*.app
+
+# Build output
+dist/
+build/
+.next/
+out/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Kilo Code
+.kilo/*.lock
+.kilo/local.*
+.kilo/snapshots/
+
+# Logs
+*.log
+
+# DuckDB cache
+*.duckdb
+*.duckdb.wal
+
+# Package
+*.egg-info/
+
+# Test & lint cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

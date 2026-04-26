@@ -1,0 +1,297 @@
+import json
+from datetime import UTC, datetime
+from typing import Annotated
+
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from pydantic import Field
+
+from . import cache, pattern_extractor, ranker, repo_inspector
+from .github_client import get_client
+from .models import (
+    CompareItem,
+    CompareResult,
+    FindReposResult,
+    InspectionResult,
+    PatternReport,
+    QualityReport,
+    RateLimitError,
+    RepoStructure,
+    RepoSummary,
+)
+
+mcp = FastMCP("RepoFinder")
+
+
+def _parse_url(url_or_slug: str) -> tuple[str, str]:
+    parsed = repo_inspector._parse_owner_repo(url_or_slug)
+    if parsed is None or not parsed[0] or not parsed[1]:
+        raise ToolError(
+            f"Invalid repo reference: '{url_or_slug}'. "
+            "Use 'owner/repo' or a full GitHub URL."
+        )
+    return parsed
+
+
+def _build_search_query(
+    task: str,
+    language: str | None,
+    min_stars: int | None,
+    max_age_days: int | None,
+    license_filter: str | None,
+) -> str:
+    parts = [task.strip()]
+    if language:
+        parts.append(f"language:{language.strip()}")
+    if min_stars is not None:
+        parts.append(f"stars:>={min_stars}")
+    if license_filter:
+        parts.append(f"license:{license_filter.strip()}")
+    if max_age_days is not None:
+        from datetime import datetime as dt
+        cutoff = dt.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        from datetime import timedelta
+        cutoff = cutoff - timedelta(days=max_age_days)
+        parts.append(f"pushed:>={cutoff.strftime('%Y-%m-%d')}")
+    if "archived:" not in " ".join(parts):
+        parts.append("archived:false")
+    return " ".join(parts)
+
+
+def _format_error(exc: Exception) -> str:
+    if isinstance(exc, RateLimitError):
+        return json.dumps({
+            "error": str(exc),
+            "recoverable": True,
+            "retry_after": exc.retry_after,
+        })
+    return json.dumps({
+        "error": str(exc),
+        "recoverable": False,
+        "retry_after": None,
+    })
+
+
+@mcp.tool(
+    annotations={"readOnlyHint": True},
+)
+async def find_repos_for_task(
+    task: Annotated[
+        str,
+        Field(description="Natural language task description, e.g., 'lightweight FastAPI backend'"),
+    ],
+    language: Annotated[
+        str | None,
+        Field(description="Programming language, e.g., Python, TypeScript, Rust"),
+    ] = None,
+    min_stars: Annotated[int | None, Field(description="Minimum star count", ge=0)] = None,
+    max_age_days: Annotated[int | None, Field(description="Max days since last push", ge=1)] = None,
+    license_filter: Annotated[
+        str | None,
+        Field(description="License SPDX identifier, e.g., mit, apache-2.0"),
+    ] = None,
+    limit: Annotated [
+        int, Field(description="Number of results to return (1-10)", ge=1, le=10)
+    ] = 10,
+) -> FindReposResult:
+    if not task.strip():
+        raise ToolError("Task description is required.")
+
+    query = _build_search_query(task, language, min_stars, max_age_days, license_filter)
+    sort = "stars" if min_stars else "updated"
+    cache_key = f"search:{ranker._hash_query(query)}:{sort}"
+
+    cached_result = cache.cache_get(cache_key)
+    if cached_result:
+        return FindReposResult(
+            query=task,
+            total_candidates_scored=int(cached_result["total_candidates_scored"]),
+            results=[
+                RepoSummary(**r) for r in cached_result["results"]
+            ],
+            cached=True,
+            timestamp=str(cached_result["timestamp"]),
+        )
+
+    client = get_client()
+    try:
+        raw_repos = await client.search_repos(query, per_page=30, sort=sort)
+    except Exception as exc:
+        raise RuntimeError(_format_error(exc))
+
+    if not raw_repos:
+        empty_result = FindReposResult(
+            query=task,
+            total_candidates_scored=0,
+            results=[],
+            cached=False,
+            timestamp=datetime.now(UTC).isoformat(),
+        )
+        return empty_result
+
+    summaries = ranker.build_repo_summaries(raw_repos, task)
+    top = summaries[:limit]
+
+    result = FindReposResult(
+        query=task,
+        total_candidates_scored=len(raw_repos),
+        results=top,
+        cached=False,
+        timestamp=datetime.now(UTC).isoformat(),
+    )
+
+    cache.cache_set(cache_key, {
+        "total_candidates_scored": result.total_candidates_scored,
+        "results": [{
+            "full_name": s.full_name,
+            "html_url": s.html_url,
+            "description": s.description,
+            "language": s.language,
+            "stars": s.stars,
+            "last_push": s.last_push,
+            "score": s.score,
+            "verdict": s.verdict,
+            "risks": s.risks,
+        } for s in result.results],
+        "timestamp": result.timestamp,
+    }, cache.get_ttl("search"))
+
+    return result
+
+
+@mcp.tool(
+    annotations={"readOnlyHint": True},
+)
+async def inspect_github_repo(
+    repo_url: Annotated[
+        str,
+        Field(description="GitHub repo URL or 'owner/repo' string"),
+    ],
+) -> InspectionResult:
+    owner, repo = _parse_url(repo_url)
+    cache_key = f"repo:{owner}/{repo}"
+
+    cached_result = cache.cache_get(cache_key)
+    if cached_result:
+        # Rebuild nested dataclasses from cached dicts
+        cached_result["structure"] = RepoStructure(
+            **cached_result.get("structure", {})
+        )
+        cached_result["quality"] = QualityReport(
+            **cached_result.get("quality", {})
+        )
+        cached_result["cached"] = True
+        return InspectionResult(**cached_result)
+
+    try:
+        result = await repo_inspector.inspect_repo(owner, repo)
+    except Exception as exc:
+        raise RuntimeError(_format_error(exc))
+
+    cache.cache_set(cache_key, {
+        "owner": result.owner,
+        "repo": result.repo,
+        "description": result.description,
+        "language": result.language,
+        "stars": result.stars,
+        "forks": result.forks,
+        "open_issues": result.open_issues,
+        "license_name": result.license_name,
+        "last_push": result.last_push,
+        "archived": result.archived,
+        "structure": result.structure,
+        "quality": result.quality,
+        "readme_preview": result.readme_preview,
+        "verdict": result.verdict,
+        "verdict_reasoning": result.verdict_reasoning,
+        "cached": result.cached,
+        "timestamp": result.timestamp,
+    }, cache.get_ttl("metadata"))
+
+    return result
+
+
+@mcp.tool(
+    annotations={"readOnlyHint": True},
+)
+async def compare_github_repos(
+    repos: Annotated[
+        list[str],
+        Field(
+            description="List of 2-5 GitHub repo URLs or 'owner/repo' strings",
+            min_length=2,
+            max_length=5,
+        ),
+    ],
+) -> CompareResult:
+    if len(repos) < 2 or len(repos) > 5:
+        raise ToolError("Provide 2–5 repositories to compare.")
+
+    import asyncio
+
+    async def inspect_one(url: str) -> InspectionResult:
+        owner, repo = _parse_url(url)
+        return await repo_inspector.inspect_repo(owner, repo)
+
+    try:
+        results = await asyncio.gather(*[inspect_one(r) for r in repos])
+    except Exception as exc:
+        raise RuntimeError(_format_error(exc))
+
+    items: list[CompareItem] = []
+    best_score = -1.0
+    best_name = ""
+
+    for r in results:
+        activity = repo_inspector._evaluate_activity(r.last_push)
+        items.append(
+            CompareItem(
+                full_name=f"{r.owner}/{r.repo}",
+                stars=r.stars,
+                activity=activity,
+                quality_score=r.quality.score,
+                license_name=r.license_name,
+                verdict=r.verdict,
+            )
+        )
+        score = r.quality.score
+        if r.archived:
+            score *= 0.5
+        if score > best_score:
+            best_score = score
+            best_name = f"{r.owner}/{r.repo}"
+
+    reasoning = (
+        f"Recommended {best_name} "
+        f"based on quality score ({best_score:.2f}) and repository health."
+    )
+    return CompareResult(
+        repos=items,
+        recommended=best_name,
+        reasoning=reasoning,
+        cached=False,
+        timestamp=datetime.now(UTC).isoformat(),
+    )
+
+
+@mcp.tool(
+    annotations={"readOnlyHint": True},
+)
+async def extract_patterns_from_repo(
+    repo_url: Annotated[
+        str,
+        Field(description="GitHub repo URL or 'owner/repo' string"),
+    ],
+    focus: Annotated[
+        str | None,
+        Field(description="Focus area, e.g., 'API design', 'auth', 'data pipeline'"),
+    ] = None,
+) -> PatternReport:
+    owner, repo = _parse_url(repo_url)
+
+    try:
+        result = await pattern_extractor.extract_patterns(owner, repo, focus)
+    except Exception as exc:
+        raise RuntimeError(_format_error(exc))
+
+    return result
