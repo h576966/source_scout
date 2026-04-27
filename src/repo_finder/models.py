@@ -110,6 +110,19 @@ class PatternReport:
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
+@dataclass
+class DeepPatternReport:
+    owner: str
+    repo: str
+    framework: str | None
+    patterns: list[Pattern] = field(default_factory=list)
+    full_file_snippets: dict[str, str] = field(default_factory=dict)
+    tree_visual: str = ""
+    verdict: str = "maybe"
+    cached: bool = False
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
 class RateLimitError(Exception):
     def __init__(self, message: str, retry_after: int | None = None):
         super().__init__(message)

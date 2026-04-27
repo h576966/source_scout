@@ -3,6 +3,7 @@ from typing import Any
 
 import httpx
 
+from . import _now_iso
 from .github_client import get_client
 from .models import InspectionResult, QualityReport, RepoStructure
 
@@ -25,7 +26,7 @@ def _evaluate_activity(pushed_at: str | None) -> str:
     if not pushed_at:
         return "unknown"
     try:
-        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+        pushed_dt = datetime.fromisoformat(pushed_at)
     except (ValueError, AttributeError):
         return "unknown"
     days = (datetime.now(UTC) - pushed_dt).days
@@ -52,9 +53,8 @@ def _extract_key_files(structure: RepoStructure) -> list[str]:
             key_files.append(pattern)
 
     for name in all_names:
-        if any("readme" in name.lower() for name in [name] if True):
-            if name not in key_files:
-                key_files.append(name)
+        if "readme" in name.lower() and name not in key_files:
+            key_files.append(name)
 
     for pattern in entry_patterns:
         if pattern in all_names:
@@ -156,6 +156,7 @@ async def evaluate_quality(
 
 
 def _determine_verdict(metadata: dict[str, Any], quality: QualityReport) -> tuple[str, str]:
+    # Verdict domain: full repo inspection — archive status + quality signals
     if metadata.get("archived", False):
         return "skip", "Repository is archived"
     if quality.score >= 0.7:
@@ -172,7 +173,6 @@ def _determine_verdict(metadata: dict[str, Any], quality: QualityReport) -> tupl
 
 async def inspect_repo(owner: str, repo: str) -> InspectionResult:
     client = get_client()
-    from datetime import datetime as dt
 
     metadata = await client.get_repo_metadata(owner, repo)
     readme = await client.get_readme(owner, repo)
@@ -202,5 +202,5 @@ async def inspect_repo(owner: str, repo: str) -> InspectionResult:
         verdict=verdict,
         verdict_reasoning=reasoning,
         cached=False,
-        timestamp=dt.now(UTC).isoformat(),
+        timestamp=_now_iso(),
     )

@@ -1,5 +1,6 @@
 import hashlib
 import math
+import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -56,7 +57,7 @@ def score_activity(repo: dict[str, Any]) -> float:
         return 0.1
 
     try:
-        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+        pushed_dt = datetime.fromisoformat(pushed_at)
     except (ValueError, AttributeError):
         return 0.1
 
@@ -141,11 +142,18 @@ def score_license(repo: dict[str, Any]) -> float:
     return 0.6
 
 
-RELEVANCE_WEIGHT = 0.40
-ACTIVITY_WEIGHT = 0.20
-POPULARITY_WEIGHT = 0.15
-STRUCTURE_WEIGHT = 0.15
-LICENSE_WEIGHT = 0.10
+def _get_weight(key: str, default: float) -> float:
+    try:
+        return float(os.environ.get(key, str(default)))
+    except ValueError:
+        return default
+
+
+RELEVANCE_WEIGHT = _get_weight("RANKER_WEIGHT_RELEVANCE", 0.40)
+ACTIVITY_WEIGHT = _get_weight("RANKER_WEIGHT_ACTIVITY", 0.20)
+POPULARITY_WEIGHT = _get_weight("RANKER_WEIGHT_POPULARITY", 0.15)
+STRUCTURE_WEIGHT = _get_weight("RANKER_WEIGHT_STRUCTURE", 0.15)
+LICENSE_WEIGHT = _get_weight("RANKER_WEIGHT_LICENSE", 0.10)
 
 
 def score_repo(repo: dict[str, Any], query: str, max_stars: int = 1) -> RepoScore:
@@ -163,6 +171,7 @@ def score_repo(repo: dict[str, Any], query: str, max_stars: int = 1) -> RepoScor
         + lic * LICENSE_WEIGHT
     )
 
+    # Verdict domain: search-space metadata ranking (stars, activity, license, etc.)
     if total >= 0.70:
         verdict = "useful"
     elif total >= 0.40:
@@ -188,7 +197,7 @@ def _identify_risks(repo: dict[str, Any], score: RepoScore) -> list[str]:
     pushed_at = repo.get("pushed_at")
     if pushed_at:
         try:
-            pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+            pushed_dt = datetime.fromisoformat(pushed_at)
             if (datetime.now(UTC) - pushed_dt).days > 365:
                 risks.append("no recent activity (>1 year)")
         except (ValueError, AttributeError):
@@ -202,6 +211,11 @@ def _identify_risks(repo: dict[str, Any], score: RepoScore) -> list[str]:
     return risks
 
 
+def _compute_max_stars(repos: list[dict[str, Any]]) -> int:
+    ms = max((r.get("stargazers_count", 0) or 0) for r in repos)
+    return max(ms, 1)
+
+
 def rank_repos(
     repos: list[dict[str, Any]],
     query: str,
@@ -210,8 +224,7 @@ def rank_repos(
     if not repos:
         return []
 
-    max_stars = max((r.get("stargazers_count", 0) or 0) for r in repos)
-    max_stars = max(max_stars, 1)
+    max_stars = _compute_max_stars(repos)
 
     scored: list[tuple[dict[str, Any], RepoScore]] = []
     for repo in repos:
@@ -231,8 +244,7 @@ def build_repo_summaries(
         return []
 
     if max_stars is None:
-        max_stars = max((r.get("stargazers_count", 0) or 0) for r in repos)
-        max_stars = max(max_stars, 1)
+        max_stars = _compute_max_stars(repos)
 
     summaries: list[RepoSummary] = []
     for repo in repos:

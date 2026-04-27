@@ -5,6 +5,8 @@ from typing import Any
 
 import duckdb
 
+from . import _now_iso
+
 _cached_connection: duckdb.DuckDBPyConnection | None = None
 
 
@@ -55,7 +57,7 @@ def cache_get(key: str) -> dict[str, Any] | None:
 
 def cache_set(key: str, value: dict[str, Any], ttl_seconds: int) -> None:
     conn = _get_connection()
-    now = datetime.now(UTC).isoformat()
+    now = _now_iso()
     value_json = json.dumps(value)
     conn.execute(
         """

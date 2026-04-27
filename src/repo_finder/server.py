@@ -1,16 +1,17 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from . import cache, pattern_extractor, ranker, repo_inspector
+from . import _now_iso, cache, pattern_extractor, ranker, repo_inspector
 from .github_client import get_client
 from .models import (
     CompareItem,
     CompareResult,
+    DeepPatternReport,
     FindReposResult,
     InspectionResult,
     PatternReport,
@@ -48,9 +49,7 @@ def _build_search_query(
     if license_filter:
         parts.append(f"license:{license_filter.strip()}")
     if max_age_days is not None:
-        from datetime import datetime as dt
-        cutoff = dt.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        from datetime import timedelta
+        cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         cutoff = cutoff - timedelta(days=max_age_days)
         parts.append(f"pushed:>={cutoff.strftime('%Y-%m-%d')}")
     if "archived:" not in " ".join(parts):
@@ -125,7 +124,7 @@ async def find_repos_for_task(
             total_candidates_scored=0,
             results=[],
             cached=False,
-            timestamp=datetime.now(UTC).isoformat(),
+            timestamp=_now_iso(),
         )
         return empty_result
 
@@ -137,7 +136,7 @@ async def find_repos_for_task(
         total_candidates_scored=len(raw_repos),
         results=top,
         cached=False,
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=_now_iso(),
     )
 
     cache.cache_set(cache_key, {
@@ -270,7 +269,7 @@ async def compare_github_repos(
         recommended=best_name,
         reasoning=reasoning,
         cached=False,
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=_now_iso(),
     )
 
 
@@ -291,6 +290,29 @@ async def extract_patterns_from_repo(
 
     try:
         result = await pattern_extractor.extract_patterns(owner, repo, focus)
+    except Exception as exc:
+        raise RuntimeError(_format_error(exc))
+
+    return result
+
+
+@mcp.tool(
+    annotations={"readOnlyHint": True},
+)
+async def deep_inspect_repo(
+    repo_url: Annotated[
+        str,
+        Field(description="GitHub repo URL or 'owner/repo' string"),
+    ],
+    focus: Annotated[
+        str | None,
+        Field(description="Focus area, e.g., 'API design', 'auth'"),
+    ] = None,
+) -> DeepPatternReport:
+    owner, repo = _parse_url(repo_url)
+
+    try:
+        result = await pattern_extractor.extract_patterns_deep(owner, repo, focus)
     except Exception as exc:
         raise RuntimeError(_format_error(exc))
 
