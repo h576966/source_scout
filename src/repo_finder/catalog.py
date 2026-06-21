@@ -7,7 +7,7 @@ from typing import Any
 
 import duckdb
 
-from .constants import _now_iso
+from .constants import MAX_REPOSITORY_SIZE_KB, _now_iso
 from .models import ReusableCandidate
 
 ANALYZER_VERSION = "deterministic-ui-v1"
@@ -43,13 +43,49 @@ BACKEND_PATH_PARTS = {
     "cron",
     "db",
     "drizzle",
+    "inngest",
+    "job",
+    "jobs",
     "middleware",
     "prisma",
+    "queue",
+    "route",
+    "routes",
     "routers",
     "server",
     "services",
+    "sync",
     "worker",
     "workers",
+}
+BACKEND_CAPABILITY_PATH_TERMS = {
+    "route-handlers": {"api", "route", "routes", "router", "routers"},
+    "server-actions": {"action", "actions", "server"},
+    "auth-middleware": {"auth", "middleware", "session", "sessions", "login"},
+    "trpc-router": {"trpc", "router", "routers"},
+    "data-access": {"db", "database", "drizzle", "prisma", "schema", "schemas"},
+    "file-storage": {"upload", "storage", "drive", "blob", "file"},
+    "email-webhooks": {"email", "webhook", "webhooks", "message", "handler"},
+    "background-jobs": {"cron", "inngest", "job", "jobs", "processor", "queue", "sync", "worker"},
+    "validation-schemas": {"schema", "schemas", "validation", "zod", "resolver"},
+    "admin-export": {"export", "pdf", "report", "reports", "xlsx", "excel"},
+}
+BACKGROUND_JOB_STRONG_TERMS = {
+    "cron",
+    "inngest",
+    "job",
+    "jobs",
+    "processor",
+    "queue",
+    "sync",
+    "worker",
+    "workers",
+}
+BACKGROUND_JOB_FALSE_POSITIVE_TERMS = {
+    "service-worker",
+    "serviceworker",
+    "sw.js",
+    "pwa",
 }
 CAPABILITY_INTENT_HINTS = {
     "data-table": {"data table", "datatable", "tanstack", "table", "columns"},
@@ -157,11 +193,13 @@ def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
             stars INTEGER,
             forks INTEGER,
             license_spdx TEXT,
+            repo_size_kb INTEGER,
             pushed_at TEXT,
             discovered_at TEXT NOT NULL,
             source_channel TEXT NOT NULL
         )
     """)
+    _ensure_column(active, "repositories", "repo_size_kb", "INTEGER")
     active.execute("""
         CREATE TABLE IF NOT EXISTS snapshots (
             snapshot_id TEXT PRIMARY KEY,
@@ -247,6 +285,33 @@ def _hash_id(*parts: str) -> str:
     return hashlib.sha256(":".join(parts).encode()).hexdigest()[:24]
 
 
+def _ensure_column(
+    conn: duckdb.DuckDBPyConnection,
+    table_name: str,
+    column_name: str,
+    column_type: str,
+) -> None:
+    exists = conn.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = ? AND column_name = ?
+        """,
+        [table_name, column_name],
+    ).fetchone()
+    if exists is None:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _owner_name(raw_repo: dict[str, Any]) -> tuple[str, str]:
     owner_obj = raw_repo.get("owner")
     owner = owner_obj.get("login") if isinstance(owner_obj, dict) else None
@@ -278,9 +343,9 @@ def upsert_repository(raw_repo: dict[str, Any], source_channel: str) -> str:
         INSERT OR REPLACE INTO repositories (
             repo_id, owner, name, html_url, description, default_branch,
             is_public, is_archived, is_mirror, detected_languages, topics,
-            stars, forks, license_spdx, pushed_at, discovered_at, source_channel
+            stars, forks, license_spdx, repo_size_kb, pushed_at, discovered_at, source_channel
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             repo_id,
@@ -297,6 +362,7 @@ def upsert_repository(raw_repo: dict[str, Any], source_channel: str) -> str:
             int(raw_repo.get("stargazers_count", 0) or 0),
             int(raw_repo.get("forks_count", 0) or 0),
             license_spdx,
+            _int_or_none(raw_repo.get("size")),
             raw_repo.get("pushed_at"),
             _now_iso(),
             source_channel,
@@ -321,10 +387,13 @@ def list_repositories_for_qualification(limit: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT * FROM repositories
+        WHERE is_public = true
+            AND is_archived = false
+            AND (repo_size_kb IS NULL OR repo_size_kb <= ?)
         ORDER BY COALESCE(stars, 0) DESC, discovered_at DESC
         LIMIT ?
         """,
-        [limit],
+        [MAX_REPOSITORY_SIZE_KB, limit],
     ).fetchall()
     columns = [str(c[0]) for c in conn.description]
     return [dict(zip(columns, row, strict=False)) for row in rows]
@@ -634,9 +703,61 @@ def _has_backend_path(paths: list[Any]) -> bool:
         parts = set(path.split("/"))
         if parts & BACKEND_PATH_PARTS:
             return True
+        if _path_tokens(path) & BACKEND_PATH_PARTS:
+            return True
         if path.startswith(("lib/", "src/lib/", "app/api/", "src/app/api/", "worker/", "src/worker/")):
             return True
     return False
+
+
+def _path_tokens(path: str) -> set[str]:
+    tokens: set[str] = set()
+    for part in path.replace("\\", "/").lower().split("/"):
+        stem = Path(part).stem
+        tokens.add(part)
+        tokens.add(stem)
+        tokens.update(token for token in stem.replace("_", "-").split("-") if token)
+    return tokens
+
+
+def _all_path_tokens(paths: list[Any]) -> set[str]:
+    tokens: set[str] = set()
+    for raw_path in paths:
+        tokens.update(_path_tokens(str(raw_path)))
+    return tokens
+
+
+def _backend_path_alignment_score(capability: str, paths: list[Any]) -> float:
+    if capability not in BACKEND_CAPABILITIES:
+        return 0.0
+
+    if capability == "background-jobs":
+        return _background_job_path_alignment_score(paths)
+
+    wanted_terms = BACKEND_CAPABILITY_PATH_TERMS.get(capability, set())
+    if not wanted_terms:
+        return 0.0
+    hits = len(_all_path_tokens(paths) & wanted_terms)
+    if hits <= 0:
+        return -0.18
+    return min(0.16, hits * 0.04)
+
+
+def _background_job_path_alignment_score(paths: list[Any]) -> float:
+    strong_hits = 0
+    false_positive_only = False
+    for raw_path in paths:
+        path = str(raw_path).replace("\\", "/").lower()
+        is_false_positive = any(term in path for term in BACKGROUND_JOB_FALSE_POSITIVE_TERMS)
+        tokens = _path_tokens(path)
+        if tokens & BACKGROUND_JOB_STRONG_TERMS and not is_false_positive:
+            strong_hits += 1
+        elif is_false_positive:
+            false_positive_only = True
+
+    if strong_hits <= 0:
+        return -0.36 if false_positive_only else -0.24
+    return min(0.18, strong_hits * 0.04)
 
 
 def _capability_intent_scores(task: str) -> dict[str, float]:
@@ -658,12 +779,17 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         SELECT
             a.asset_id, a.repo_id, a.capability, a.entry_paths,
             a.dependency_paths, a.external_dependencies, a.evidence_paths,
-            a.synthesis, a.reuse_score, s.commit_sha, r.html_url, c.gemma_profile
+            a.synthesis, a.reuse_score, s.commit_sha, r.html_url,
+            r.is_public, r.is_archived, r.repo_size_kb, c.gemma_profile
         FROM assets a
         JOIN snapshots s ON s.snapshot_id = a.snapshot_id
         JOIN repositories r ON r.repo_id = a.repo_id
         LEFT JOIN repository_cards c ON c.snapshot_id = a.snapshot_id
-        """
+        WHERE r.is_public = true
+            AND r.is_archived = false
+            AND (r.repo_size_kb IS NULL OR r.repo_size_kb <= ?)
+        """,
+        [MAX_REPOSITORY_SIZE_KB],
     ).fetchall()
     columns = [str(c[0]) for c in conn.description]
     task_terms = _task_terms(task)
@@ -694,6 +820,10 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         ui_path_score = _synthesis_score(synthesis, "ui_path_score")
         noise_penalty = _synthesis_score(synthesis, "noise_penalty")
         capability_path_score = _synthesis_score(synthesis, "capability_path_score")
+        path_alignment_score = _backend_path_alignment_score(
+            capability,
+            entry_paths + evidence_paths,
+        )
         base_score = _float_value(data.get("reuse_score"))
         capability_intent_score = intent_scores.get(capability, 0.0)
         score = (
@@ -704,6 +834,7 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
             + (capability_intent_score * 0.28)
             + min(0.12, overlap * 0.035)
             - (noise_penalty * 0.16)
+            + path_alignment_score
         )
         if best_intent_score >= 0.35 and capability_intent_score < best_intent_score * 0.75:
             score -= 0.32
@@ -724,21 +855,22 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
             score -= 0.08
         if not entry_paths:
             score -= 0.12
-        score = max(0.0, min(score, 1.0))
+        sort_score = max(0.0, score)
+        display_score = min(sort_score, 1.0)
         candidate = ReusableCandidate(
             candidate_id=str(data["asset_id"]),
             repo_id=str(data["repo_id"]),
             html_url=str(data["html_url"]),
             commit_sha=str(data["commit_sha"]),
             capability=capability,
-            score=round(score, 4),
+            score=round(display_score, 4),
             entry_paths=[str(p) for p in entry_paths],
             dependency_paths=[str(p) for p in dependency_paths],
             external_dependencies=[str(p) for p in external_dependencies],
             evidence_paths=[str(p) for p in evidence_paths],
             adaptation_notes=[str(p) for p in synthesis.get("adaptation_notes", [])],
         )
-        scored.append((candidate.score, candidate))
+        scored.append((sort_score, candidate))
 
     scored.sort(key=lambda item: item[0], reverse=True)
     unique_by_repo: dict[str, ReusableCandidate] = {}

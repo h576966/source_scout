@@ -6,11 +6,27 @@ from typing import Any, cast
 from fastmcp.exceptions import ToolError
 
 from . import catalog, snapshotter
-from .constants import SKIP_DIRS
+from .constants import MAX_REPOSITORY_SIZE_KB, SKIP_DIRS
 from .github_client import get_client
 
 UI_RECENCY_DAYS = 180
 CARD_VERSION = "repo-card-v1"
+SOURCE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx"}
+GENERATED_VENDOR_DIRS = {
+    "dist",
+    "generated",
+    "__generated__",
+    "vendor",
+    "vendors",
+}
+LOCKFILE_NAMES = {
+    "bun.lock",
+    "bun.lockb",
+    "npm-shrinkwrap.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+}
 
 NEXTJS_UI_CAPABILITIES = {
     "dashboard": "dashboard sidebar admin",
@@ -40,6 +56,7 @@ def build_nextjs_ui_queries() -> list[tuple[str, str]]:
         "language:TypeScript "
         "archived:false "
         "is:public "
+        f"size:<={MAX_REPOSITORY_SIZE_KB} "
         f"pushed:>={cutoff}"
     )
     for capability, terms in NEXTJS_UI_CAPABILITIES.items():
@@ -90,6 +107,16 @@ def _recent_enough(pushed_at: str | None) -> bool:
     return pushed >= cutoff
 
 
+def _repo_size_kb(metadata: dict[str, Any]) -> int | None:
+    raw_size = metadata.get("size")
+    if raw_size is None:
+        return None
+    try:
+        return int(raw_size)
+    except (TypeError, ValueError):
+        return None
+
+
 def _passes_metadata_gates(metadata: dict[str, Any]) -> tuple[bool, str]:
     if bool(metadata.get("private", False)):
         return False, "not public"
@@ -97,6 +124,9 @@ def _passes_metadata_gates(metadata: dict[str, Any]) -> tuple[bool, str]:
         return False, "archived"
     if metadata.get("mirror_url"):
         return False, "mirror"
+    size_kb = _repo_size_kb(metadata)
+    if size_kb is not None and size_kb > MAX_REPOSITORY_SIZE_KB:
+        return False, "too large"
     if not _recent_enough(str(metadata.get("pushed_at") or "")):
         return False, "stale"
     return True, "metadata qualified"
@@ -150,12 +180,19 @@ def _dependency_names(manifests: dict[str, Any]) -> set[str]:
     return names
 
 
+def _has_generated_vendor_part(rel_path: str) -> bool:
+    return bool({part.lower() for part in Path(rel_path).parts} & GENERATED_VENDOR_DIRS)
+
+
 def build_repository_card(snapshot_root: Path) -> dict[str, Any]:
     files = _walk_files(snapshot_root)
     manifests = _package_manifests(snapshot_root)
     deps = _dependency_names(manifests)
-    source_files = [p for p in files if Path(p).suffix in {".ts", ".tsx", ".js", ".jsx"}]
+    source_files = [p for p in files if Path(p).suffix in SOURCE_EXTENSIONS]
+    usable_source_files = [p for p in source_files if not _has_generated_vendor_part(p)]
     tsx_files = [p for p in files if p.endswith(".tsx")]
+    generated_vendor_files = [p for p in files if _has_generated_vendor_part(p)]
+    lockfiles = [p for p in files if Path(p).name in LOCKFILE_NAMES]
     stack_signals = {
         "has_react_dependency": "react" in deps,
         "has_next_dependency": "next" in deps,
@@ -167,7 +204,10 @@ def build_repository_card(snapshot_root: Path) -> dict[str, Any]:
     }
     deterministic_features = {
         "source_file_count": len(source_files),
+        "usable_source_file_count": len(usable_source_files),
         "tsx_file_count": len(tsx_files),
+        "generated_vendor_file_count": len(generated_vendor_files),
+        "lockfile_count": len(lockfiles),
         "package_manifest_count": len(manifests),
         "top_level_files": [p for p in files if "/" not in p][:40],
     }
@@ -200,14 +240,36 @@ def _passes_ui_gates(metadata: dict[str, Any], card: dict[str, Any]) -> tuple[bo
     if not ok:
         return ok, reason
 
+    ok, reason = _passes_snapshot_content_gates(card)
+    if not ok:
+        return ok, reason
+
     signals = card["stack_signals"]
-    features = card["deterministic_features"]
     has_react_ts = signals["has_react_dependency"] and signals["has_typescript_files"]
     has_next_tsx = signals["has_next_dependency"] and signals["has_tsx_files"]
     if not (has_react_ts or has_next_tsx):
         return False, "no React/TypeScript UI stack evidence"
-    if int(features["source_file_count"]) < 1:
-        return False, "too few source files"
+    return True, "qualified"
+
+
+def _passes_snapshot_content_gates(card: dict[str, Any]) -> tuple[bool, str]:
+    features = card["deterministic_features"]
+    source_file_count = int(features["source_file_count"])
+    usable_source_file_count = int(features.get("usable_source_file_count", source_file_count))
+    total_files = int(card["tree_summary"]["total_files"])
+    generated_vendor_file_count = int(features.get("generated_vendor_file_count", 0))
+    lockfile_count = int(features.get("lockfile_count", 0))
+    if total_files < 1:
+        return False, "docs-only or empty"
+    if lockfile_count > 0 and source_file_count == 0:
+        return False, "lockfile-only"
+    if generated_vendor_file_count > 0 and usable_source_file_count < 1:
+        return False, "generated/vendor-heavy"
+    if usable_source_file_count < 1:
+        return False, "docs-only or empty"
+    generated_vendor_ratio = generated_vendor_file_count / max(total_files, 1)
+    if total_files >= 20 and generated_vendor_ratio >= 0.6:
+        return False, "generated/vendor-heavy"
     return True, "qualified"
 
 

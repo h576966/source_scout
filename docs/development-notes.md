@@ -16,8 +16,10 @@ Useful implementation notes preserved from the old agent-specific setup.
 ## GitHub API
 
 - Repository search uses `GET /search/repositories` with query qualifiers such as
-  `language:`, `topic:`, `pushed:`, `archived:false`, `is:public`, and
+  `language:`, `topic:`, `pushed:`, `archived:false`, `is:public`, `size:`, and
   `in:name,description,topics,readme`.
+- Qualification rejects archived, private, stale, mirrored, oversized,
+  docs-only/empty, lockfile-only, and generated/vendor-heavy repositories.
 - Authenticated search has tighter search-specific limits than normal REST calls;
   keep scouting offline/batched rather than per MCP request.
 - Treat GitHub language metadata as a signal only. Confirm stack via manifests,

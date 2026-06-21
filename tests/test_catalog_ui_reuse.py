@@ -101,6 +101,84 @@ def test_repository_card_and_ui_gates(tmp_path: Path) -> None:
     assert reason == "qualified"
 
 
+def test_scout_queries_filter_archived_stale_and_large_repos() -> None:
+    query = pipeline.build_nextjs_ui_queries()[0][1]
+
+    assert "archived:false" in query
+    assert "pushed:>=" in query
+    assert f"size:<={pipeline.MAX_REPOSITORY_SIZE_KB}" in query
+
+
+def test_metadata_gates_reject_archived_and_large_repos() -> None:
+    base = {
+        "private": False,
+        "archived": False,
+        "mirror_url": None,
+        "pushed_at": "2026-06-20T12:00:00Z",
+        "size": 10,
+    }
+
+    assert pipeline._passes_metadata_gates({**base, "archived": True}) == (False, "archived")
+    assert pipeline._passes_metadata_gates(
+        {**base, "size": pipeline.MAX_REPOSITORY_SIZE_KB + 1}
+    ) == (False, "too large")
+
+
+def test_list_repositories_for_qualification_filters_archived_and_large_repos() -> None:
+    def store(name: str, archived: bool, size: int) -> None:
+        catalog.upsert_repository(
+            {
+                "owner": {"login": "owner"},
+                "name": name,
+                "full_name": f"owner/{name}",
+                "html_url": f"https://github.com/owner/{name}",
+                "private": False,
+                "archived": archived,
+                "language": "TypeScript",
+                "size": size,
+                "topics": ["nextjs"],
+            },
+            "test",
+        )
+
+    store("good", archived=False, size=10)
+    store("archived", archived=True, size=10)
+    store("huge", archived=False, size=pipeline.MAX_REPOSITORY_SIZE_KB + 1)
+
+    candidates = catalog.list_repositories_for_qualification(10)
+
+    assert [candidate["repo_id"] for candidate in candidates] == ["owner/good"]
+
+
+def test_snapshot_content_gates_reject_docs_only_and_lockfile_only(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    (docs_root / "README.md").write_text("# Docs only", encoding="utf-8")
+    docs_card = pipeline.build_repository_card(docs_root)
+
+    assert pipeline._passes_snapshot_content_gates(docs_card) == (False, "docs-only or empty")
+
+    lock_root = tmp_path / "lock"
+    lock_root.mkdir()
+    (lock_root / "package-lock.json").write_text("{}", encoding="utf-8")
+    lock_card = pipeline.build_repository_card(lock_root)
+
+    assert pipeline._passes_snapshot_content_gates(lock_card) == (False, "lockfile-only")
+
+
+def test_snapshot_content_gates_reject_generated_vendor_heavy_repo(tmp_path: Path) -> None:
+    _write_nextjs_fixture(tmp_path)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for index in range(25):
+        (dist / f"generated-{index}.js").write_text("export const value = 1", encoding="utf-8")
+
+    card = pipeline.build_repository_card(tmp_path)
+
+    assert card["deterministic_features"]["generated_vendor_file_count"] == 25
+    assert pipeline._passes_snapshot_content_gates(card) == (False, "generated/vendor-heavy")
+
+
 def test_evidence_scan_returns_line_citations_and_dependencies(tmp_path: Path) -> None:
     _write_nextjs_fixture(tmp_path)
     result = evidence.scan_snapshot(tmp_path, "data-table")
@@ -252,6 +330,136 @@ def test_search_assets_uses_gemma_profile_and_ui_scores(tmp_path: Path) -> None:
     assert results[0].candidate_id == good_asset_id
     assert results[0].repo_id == "good/repo"
     assert results[0].score > results[1].score
+
+
+def test_search_assets_sorts_by_raw_score_before_display_clamp(tmp_path: Path) -> None:
+    def store_asset(repo_id: str, entry_paths: list[str], dependencies: list[str], cap_path: float) -> str:
+        owner, name = repo_id.split("/", 1)
+        root = tmp_path / owner / name
+        root.mkdir(parents=True)
+        stored_repo_id = catalog.upsert_repository(
+            {
+                "owner": {"login": owner},
+                "name": name,
+                "full_name": repo_id,
+                "html_url": f"https://github.com/{repo_id}",
+                "private": False,
+                "archived": False,
+                "language": "TypeScript",
+                "topics": ["nextjs", "table"],
+            },
+            "test",
+        )
+        snapshot_id = catalog.upsert_snapshot(stored_repo_id, f"{owner}sha", "main", root)
+        catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+        return catalog.upsert_asset(
+            snapshot_id,
+            stored_repo_id,
+            "data-table",
+            {
+                "entry_paths": entry_paths,
+                "dependency_paths": ["package.json"],
+                "external_dependencies": dependencies,
+                "evidence_paths": [f"{entry_paths[0]}:1-3"],
+                "reuse_score": 1.0,
+                "synthesis": {
+                    "adaptation_notes": [],
+                    "ui_path_score": 1.0,
+                    "noise_penalty": 0.0,
+                    "capability_path_score": cap_path,
+                },
+            },
+        )
+
+    store_asset(
+        "lower/repo",
+        ["components/misc/page.tsx"],
+        ["next", "react", "tailwindcss"],
+        0.8,
+    )
+    better_asset_id = store_asset(
+        "better/repo",
+        ["components/data-table/data-table.tsx"],
+        ["next", "react", "tailwindcss", "@tanstack/react-table"],
+        1.0,
+    )
+
+    results = catalog.search_assets(
+        "Find a reusable data table for a Next.js Tailwind dashboard",
+        max_repos=2,
+    )
+
+    assert results[0].candidate_id == better_asset_id
+    assert results[0].score == 1.0
+    assert results[1].score == 1.0
+
+
+def test_backend_path_detection_includes_action_filenames() -> None:
+    assert catalog._has_backend_path(["src/app/(auth)/register/actions.ts"]) is True
+
+
+def test_search_assets_prefers_real_background_job_paths_over_service_worker_noise(
+    tmp_path: Path,
+) -> None:
+    def store_asset(repo_id: str, entry_paths: list[str], reuse_score: float) -> str:
+        owner, name = repo_id.split("/", 1)
+        root = tmp_path / owner / name
+        root.mkdir(parents=True)
+        stored_repo_id = catalog.upsert_repository(
+            {
+                "owner": {"login": owner},
+                "name": name,
+                "full_name": repo_id,
+                "html_url": f"https://github.com/{repo_id}",
+                "private": False,
+                "archived": False,
+                "language": "TypeScript",
+                "topics": ["nextjs"],
+            },
+            "test",
+        )
+        snapshot_id = catalog.upsert_snapshot(stored_repo_id, f"{owner}sha", "main", root)
+        catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+        return catalog.upsert_asset(
+            snapshot_id,
+            stored_repo_id,
+            "background-jobs",
+            {
+                "entry_paths": entry_paths,
+                "dependency_paths": ["package.json"],
+                "external_dependencies": ["next", "react"],
+                "evidence_paths": [f"{path}:1-3" for path in entry_paths],
+                "reuse_score": reuse_score,
+                "synthesis": {
+                    "adaptation_notes": [],
+                    "ui_path_score": 1.0,
+                    "noise_penalty": 0.0,
+                    "capability_path_score": 1.0,
+                },
+            },
+        )
+
+    store_asset(
+        "pwa/repo",
+        [
+            "src/lib/register-service-worker.ts",
+            "src/app/admin/feeding/components/FeedSchedule.tsx",
+        ],
+        1.0,
+    )
+    worker_asset_id = store_asset(
+        "worker/repo",
+        ["worker/src/lib/sequence-processor.ts", "worker/src/index.ts"],
+        0.8,
+    )
+
+    results = catalog.search_assets(
+        "Find background job, worker, sync, or scheduled processing code",
+        max_repos=2,
+    )
+
+    assert results[0].candidate_id == worker_asset_id
+    assert results[0].repo_id == "worker/repo"
 
 
 async def _tool_names(module) -> set[str]:
