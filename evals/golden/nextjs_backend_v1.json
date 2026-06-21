@@ -1,0 +1,128 @@
+{
+  "suite_id": "nextjs-backend",
+  "description": "Golden tasks for reusable Next.js backend and server-side patterns.",
+  "tasks": [
+    {
+      "id": "backend_route_handlers",
+      "task": "Find reusable Next.js route handlers or API routes for server endpoints.",
+      "capability": "route-handlers",
+      "expected_repo_ids": ["FabioTavernini/spendemon", "rodrigorochameire-prog/Defender"],
+      "acceptable_repo_ids": ["choyiny/saasmail"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["api", "route", "router"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "backend_server_actions",
+      "task": "Find reusable Next.js server actions for admin workflows.",
+      "capability": "server-actions",
+      "expected_repo_ids": ["rodrigorochameire-prog/Defender"],
+      "acceptable_repo_ids": ["FabioTavernini/spendemon"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["actions", "server"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "backend_auth_middleware",
+      "task": "Find auth middleware, sessions, or server-side auth helpers for a Next.js app.",
+      "capability": "auth-middleware",
+      "expected_repo_ids": [
+        "FabioTavernini/spendemon",
+        "rodrigorochameire-prog/Defender",
+        "Muhammad-Faizan-Alam/cattleCare"
+      ],
+      "acceptable_repo_ids": ["choyiny/saasmail"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["auth", "middleware", "session", "login"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "backend_trpc_routers",
+      "task": "Find tRPC routers or typed API layer patterns.",
+      "capability": "trpc-router",
+      "expected_repo_ids": ["rodrigorochameire-prog/Defender"],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["trpc", "router"],
+      "required_dependencies_any": ["@trpc/server"],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "backend_data_access",
+      "task": "Find Drizzle or Prisma data access patterns and database schemas.",
+      "capability": "data-access",
+      "expected_repo_ids": ["rodrigorochameire-prog/Defender", "choyiny/saasmail"],
+      "acceptable_repo_ids": ["ufukayyildiz/omnidock"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["drizzle", "schema", "db", "database"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "backend_file_storage",
+      "task": "Find file upload or storage service code for Drive, blob, or object storage.",
+      "capability": "file-storage",
+      "expected_repo_ids": ["rodrigorochameire-prog/Defender"],
+      "acceptable_repo_ids": ["choyiny/saasmail"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["upload", "storage", "drive", "file"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "backend_email_webhooks",
+      "task": "Find email handlers, webhook handlers, or message processing backend code.",
+      "capability": "email-webhooks",
+      "expected_repo_ids": ["ufukayyildiz/omnidock", "choyiny/saasmail"],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["email", "webhook", "message", "handler"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "backend_background_jobs",
+      "task": "Find background job, worker, sync, or scheduled processing code.",
+      "capability": "background-jobs",
+      "expected_repo_ids": [
+        "ufukayyildiz/omnidock",
+        "Felix-au/SyncZen-Local",
+        "rodrigorochameire-prog/Defender"
+      ],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["worker", "sync", "job", "cron", "schedule"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "backend_validation_schemas",
+      "task": "Find validation schemas for API inputs or admin forms.",
+      "capability": "validation-schemas",
+      "expected_repo_ids": [
+        "Muhammad-Faizan-Alam/cattleCare",
+        "rodrigorochameire-prog/Defender",
+        "choyiny/saasmail"
+      ],
+      "acceptable_repo_ids": [],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["validation", "schema", "zod", "resolver"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    },
+    {
+      "id": "backend_admin_export_reporting",
+      "task": "Find admin data export or reporting backend code for PDF, Excel, or reports.",
+      "capability": "admin-export",
+      "expected_repo_ids": ["rodrigorochameire-prog/Defender", "Muhammad-Faizan-Alam/cattleCare"],
+      "acceptable_repo_ids": ["x0ll/Ransomware-Attack-Detection-Using-Machine-Learning"],
+      "avoid_repo_ids": [],
+      "required_path_terms_any": ["export", "report", "pdf", "excel", "xlsx"],
+      "required_dependencies_any": [],
+      "max_rank_for_hit": 3
+    }
+  ]
+}

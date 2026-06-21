@@ -34,6 +34,7 @@ repo-finder qualify --limit 100
 repo-finder lmstudio-status --smoke-test
 repo-finder profile --limit 30
 repo-finder evidence --capability data-table --limit 30
+repo-finder eval --suite ui-reuse --top-k 5
 repo-finder serve-mcp
 ```
 
@@ -115,6 +116,17 @@ Corpus quality check:
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_quality_checks.py
 ```
+
+Golden catalog evals:
+
+```powershell
+repo-finder eval --suite ui-reuse --top-k 5 --label local-ui-check
+repo-finder eval --suite nextjs-backend --top-k 5 --label local-backend-check
+```
+
+Eval reports are written to `.repo_finder/eval_runs/<suite_id>/`. They measure
+top-1/top-3/top-5 hits, MRR, avoid-repo violations, and evidence constraint
+failures against tracked golden tasks in `evals/golden/`.
 
 ## Project Structure
 

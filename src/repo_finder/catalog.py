@@ -12,6 +12,67 @@ from .models import ReusableCandidate
 
 ANALYZER_VERSION = "deterministic-ui-v1"
 DEFAULT_DB_NAME = "cache.duckdb"
+UI_CAPABILITIES = {
+    "data-table",
+    "command-palette",
+    "auth-ui",
+    "settings",
+    "dashboard",
+    "forms",
+    "file-upload",
+    "charts",
+    "navigation",
+    "admin-interface",
+}
+BACKEND_CAPABILITIES = {
+    "route-handlers",
+    "server-actions",
+    "auth-middleware",
+    "trpc-router",
+    "data-access",
+    "file-storage",
+    "email-webhooks",
+    "background-jobs",
+    "validation-schemas",
+    "admin-export",
+}
+BACKEND_PATH_PARTS = {
+    "actions",
+    "api",
+    "auth",
+    "cron",
+    "db",
+    "drizzle",
+    "middleware",
+    "prisma",
+    "routers",
+    "server",
+    "services",
+    "worker",
+    "workers",
+}
+CAPABILITY_INTENT_HINTS = {
+    "data-table": {"data table", "datatable", "tanstack", "table", "columns"},
+    "command-palette": {"command palette", "cmdk", "quick navigation", "command"},
+    "auth-ui": {"auth", "login", "sign in", "signin", "signup", "password"},
+    "settings": {"settings", "profile", "security", "account", "preferences"},
+    "dashboard": {"dashboard", "overview", "kpi", "analytics"},
+    "forms": {"form", "forms", "multi step", "multi-step", "validation"},
+    "file-upload": {"file upload", "upload", "import", "dropzone"},
+    "charts": {"chart", "charts", "recharts", "analytics", "graph"},
+    "navigation": {"navigation", "sidebar", "navbar", "layout"},
+    "admin-interface": {"admin crud", "crud", "detail pages", "admin interface"},
+    "route-handlers": {"route handler", "route handlers", "api route", "api routes", "endpoints"},
+    "server-actions": {"server action", "server actions", "actions", "admin workflows"},
+    "auth-middleware": {"auth middleware", "sessions", "session", "auth helpers", "server-side auth"},
+    "trpc-router": {"trpc", "typed api", "router", "routers"},
+    "data-access": {"drizzle", "prisma", "data access", "database", "schema"},
+    "file-storage": {"file upload", "storage", "drive", "blob", "object storage"},
+    "email-webhooks": {"email", "webhook", "webhooks", "message processing", "handlers"},
+    "background-jobs": {"background job", "background jobs", "worker", "sync", "scheduled"},
+    "validation-schemas": {"validation schema", "validation schemas", "zod", "api inputs"},
+    "admin-export": {"admin export", "data export", "reporting", "pdf", "excel", "reports"},
+}
 
 ALLOWED_REUSE_OUTCOMES = {
     "returned",
@@ -485,6 +546,111 @@ def get_asset_detail(asset_id: str) -> dict[str, Any] | None:
     return detail
 
 
+def _task_terms(task: str) -> set[str]:
+    normalized = task.lower().replace("-", " ").replace("_", " ")
+    return {term for term in normalized.split() if len(term) > 2}
+
+
+def _capability_terms(capability: str) -> set[str]:
+    terms = set(capability.lower().replace("-", " ").split())
+    if capability == "data-table":
+        terms.update({"datatable", "tanstack", "columns", "grid"})
+    if capability == "command-palette":
+        terms.update({"cmdk", "command", "palette"})
+    if capability == "trpc-router":
+        terms.update({"trpc", "router"})
+    if capability == "data-access":
+        terms.update({"drizzle", "prisma", "database", "schema"})
+    if capability == "auth-middleware":
+        terms.update({"auth", "session", "middleware"})
+    return {term for term in terms if len(term) > 2}
+
+
+def _float_value(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _profile_match_score(
+    profile: dict[str, Any] | None,
+    task_terms: set[str],
+    capability: str,
+) -> float:
+    if not profile:
+        return 0.0
+
+    capability_terms = _capability_terms(capability)
+    wanted_terms = task_terms | capability_terms
+    best_capability = 0.0
+    capabilities = profile.get("capabilities", [])
+    if isinstance(capabilities, list):
+        for item in capabilities:
+            if not isinstance(item, dict):
+                continue
+            evidence = item.get("evidence", [])
+            evidence_text = " ".join(str(value) for value in evidence) if isinstance(evidence, list) else ""
+            searchable = f"{item.get('name', '')} {evidence_text}".lower().replace("-", " ")
+            capability_overlap = sum(1 for term in capability_terms if term in searchable)
+            task_overlap = sum(1 for term in wanted_terms if term in searchable)
+            if task_overlap <= 0:
+                continue
+            confidence = _float_value(item.get("confidence"))
+            if capability_overlap <= 0:
+                candidate_score = confidence * min(0.18, task_overlap * 0.05)
+            else:
+                candidate_score = confidence * (
+                    0.45 + (capability_overlap * 0.18) + (task_overlap * 0.04)
+                )
+            best_capability = max(best_capability, min(1.0, candidate_score))
+
+    quality = (
+        _float_value(profile.get("likely_usefulness"))
+        + _float_value(profile.get("extractability"))
+        + _float_value(profile.get("maintenance_quality"))
+    ) / 3
+    concerns = " ".join(str(value).lower() for value in profile.get("concerns", []))
+    concern_penalty = 0.08 if any(term in concerns for term in ("coupled", "low quality", "unclear")) else 0.0
+    quality_weight = 0.22 if best_capability >= 0.25 else 0.1
+    combined = (
+        (best_capability * (1 - quality_weight))
+        + (quality * quality_weight)
+        - concern_penalty
+    )
+    return round(
+        max(0.0, min(1.0, combined)),
+        4,
+    )
+
+
+def _synthesis_score(synthesis: dict[str, Any], key: str) -> float:
+    return max(0.0, min(1.0, _float_value(synthesis.get(key))))
+
+
+def _has_backend_path(paths: list[Any]) -> bool:
+    for raw_path in paths:
+        path = str(raw_path).replace("\\", "/").lower()
+        parts = set(path.split("/"))
+        if parts & BACKEND_PATH_PARTS:
+            return True
+        if path.startswith(("lib/", "src/lib/", "app/api/", "src/app/api/", "worker/", "src/worker/")):
+            return True
+    return False
+
+
+def _capability_intent_scores(task: str) -> dict[str, float]:
+    lowered = task.lower().replace("_", " ")
+    scores: dict[str, float] = {}
+    for capability, hints in CAPABILITY_INTENT_HINTS.items():
+        score = 0.0
+        for hint in hints:
+            if hint in lowered:
+                score += 0.35 if " " in hint else 0.18
+        scores[capability] = min(1.0, score)
+    return scores
+
+
 def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
     conn = get_connection()
     rows = conn.execute(
@@ -492,14 +658,17 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         SELECT
             a.asset_id, a.repo_id, a.capability, a.entry_paths,
             a.dependency_paths, a.external_dependencies, a.evidence_paths,
-            a.synthesis, a.reuse_score, s.commit_sha, r.html_url
+            a.synthesis, a.reuse_score, s.commit_sha, r.html_url, c.gemma_profile
         FROM assets a
         JOIN snapshots s ON s.snapshot_id = a.snapshot_id
         JOIN repositories r ON r.repo_id = a.repo_id
+        LEFT JOIN repository_cards c ON c.snapshot_id = a.snapshot_id
         """
     ).fetchall()
     columns = [str(c[0]) for c in conn.description]
-    task_terms = {term for term in task.lower().replace("-", " ").split() if len(term) > 2}
+    task_terms = _task_terms(task)
+    intent_scores = _capability_intent_scores(task)
+    best_intent_score = max(intent_scores.values(), default=0.0)
 
     scored: list[tuple[float, ReusableCandidate]] = []
     for row in rows:
@@ -509,6 +678,7 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         external_dependencies = _json_load(data.get("external_dependencies"), [])
         evidence_paths = _json_load(data.get("evidence_paths"), [])
         synthesis = _json_load(data.get("synthesis"), {})
+        gemma_profile = _json_load(data.get("gemma_profile"), None)
         searchable = " ".join(
             [
                 str(data.get("capability", "")),
@@ -519,14 +689,49 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
             ]
         ).lower()
         overlap = sum(1 for term in task_terms if term in searchable)
-        score = float(data.get("reuse_score", 0.0)) + (overlap * 0.08)
+        capability = str(data["capability"])
+        profile_score = _profile_match_score(gemma_profile, task_terms, capability)
+        ui_path_score = _synthesis_score(synthesis, "ui_path_score")
+        noise_penalty = _synthesis_score(synthesis, "noise_penalty")
+        capability_path_score = _synthesis_score(synthesis, "capability_path_score")
+        base_score = _float_value(data.get("reuse_score"))
+        capability_intent_score = intent_scores.get(capability, 0.0)
+        score = (
+            (base_score * 0.55)
+            + (ui_path_score * 0.2)
+            + (profile_score * 0.25)
+            + (capability_path_score * 0.12)
+            + (capability_intent_score * 0.28)
+            + min(0.12, overlap * 0.035)
+            - (noise_penalty * 0.16)
+        )
+        if best_intent_score >= 0.35 and capability_intent_score < best_intent_score * 0.75:
+            score -= 0.32
+        if best_intent_score >= 0.7 and capability in UI_CAPABILITIES and capability_intent_score < 0.35:
+            score -= 0.18
+        if capability == "data-table" and "@tanstack/react-table" not in external_dependencies:
+            score -= (1 - capability_path_score) * 0.12
+        if capability == "trpc-router" and "@trpc/server" not in external_dependencies:
+            score -= 0.35
+        if capability == "data-access" and not (
+            {"drizzle-orm", "prisma", "@prisma/client"} & set(external_dependencies)
+            or capability_path_score >= 0.5
+        ):
+            score -= 0.2
+        if capability in BACKEND_CAPABILITIES and not _has_backend_path(entry_paths):
+            score -= 0.28
+        if gemma_profile and profile_score < 0.12:
+            score -= 0.08
+        if not entry_paths:
+            score -= 0.12
+        score = max(0.0, min(score, 1.0))
         candidate = ReusableCandidate(
             candidate_id=str(data["asset_id"]),
             repo_id=str(data["repo_id"]),
             html_url=str(data["html_url"]),
             commit_sha=str(data["commit_sha"]),
-            capability=str(data["capability"]),
-            score=round(min(score, 1.0), 4),
+            capability=capability,
+            score=round(score, 4),
             entry_paths=[str(p) for p in entry_paths],
             dependency_paths=[str(p) for p in dependency_paths],
             external_dependencies=[str(p) for p in external_dependencies],
@@ -536,7 +741,13 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         scored.append((candidate.score, candidate))
 
     scored.sort(key=lambda item: item[0], reverse=True)
-    return [candidate for _, candidate in scored[:max_repos]]
+    unique_by_repo: dict[str, ReusableCandidate] = {}
+    for _, candidate in scored:
+        if candidate.repo_id not in unique_by_repo:
+            unique_by_repo[candidate.repo_id] = candidate
+        if len(unique_by_repo) >= max_repos:
+            break
+    return list(unique_by_repo.values())
 
 
 def record_reuse_outcome(

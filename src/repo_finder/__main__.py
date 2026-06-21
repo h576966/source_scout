@@ -56,6 +56,12 @@ def main() -> None:
     evidence_parser.add_argument("--capability", required=True)
     evidence_parser.add_argument("--limit", type=int, default=30)
 
+    eval_parser = subparsers.add_parser("eval", help="Run a local golden eval suite")
+    eval_parser.add_argument("--suite", default="ui-reuse")
+    eval_parser.add_argument("--top-k", type=int, default=5)
+    eval_parser.add_argument("--label", default=None)
+    eval_parser.add_argument("--output", default=None)
+
     profile_parser = subparsers.add_parser(
         "profile",
         help="Profile repository cards with Gemma via LM Studio",
@@ -106,6 +112,23 @@ def main() -> None:
 
         result = run_evidence(args.capability, args.limit)
         print(result)
+        return
+
+    if args.command == "eval":
+        from pathlib import Path
+
+        from .eval_runner import run_eval
+
+        output_path = Path(args.output) if args.output else None
+        result = run_eval(args.suite, args.top_k, label=args.label, output_path=output_path)
+        summary = {
+            "suite_id": result["suite_id"],
+            "label": result["label"],
+            "passed": result["passed"],
+            "metrics": result["metrics"],
+            "report_path": result["report_path"],
+        }
+        print(json.dumps(summary, indent=2, sort_keys=True))
         return
 
     if args.command == "profile":
