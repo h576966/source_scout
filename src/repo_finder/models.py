@@ -127,3 +127,49 @@ class RateLimitError(Exception):
     def __init__(self, message: str, retry_after: int | None = None):
         super().__init__(message)
         self.retry_after = retry_after
+
+
+@dataclass
+class ReusableCandidate:
+    candidate_id: str
+    repo_id: str
+    html_url: str
+    commit_sha: str
+    capability: str
+    score: float
+    entry_paths: list[str] = field(default_factory=list)
+    dependency_paths: list[str] = field(default_factory=list)
+    external_dependencies: list[str] = field(default_factory=list)
+    evidence_paths: list[str] = field(default_factory=list)
+    adaptation_notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class FindReusableCodeResult:
+    task: str
+    total_candidates: int
+    results: list[ReusableCandidate]
+    timestamp: str
+    next_steps: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SourceBundleResult:
+    candidate_id: str
+    repo_id: str
+    commit_sha: str
+    bundle_path: str
+    manifest_path: str
+    files: list[str] = field(default_factory=list)
+    external_dependencies: list[str] = field(default_factory=list)
+    evidence_paths: list[str] = field(default_factory=list)
+    adaptation_notes: list[str] = field(default_factory=list)
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+@dataclass
+class RecordReuseOutcomeResult:
+    candidate_id: str
+    outcome: str
+    recorded: bool
+    timestamp: str

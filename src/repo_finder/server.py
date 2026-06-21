@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -6,7 +7,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from . import cache, pattern_extractor, ranker, repo_inspector
+from . import bundles, cache, catalog, pattern_extractor, ranker, repo_inspector
 from .constants import _now_iso
 from .github_client import get_client
 from .models import (
@@ -14,12 +15,15 @@ from .models import (
     CompareResult,
     DeepPatternReport,
     FindReposResult,
+    FindReusableCodeResult,
     InspectionResult,
     PatternReport,
     QualityReport,
     RateLimitError,
+    RecordReuseOutcomeResult,
     RepoStructure,
     RepoSummary,
+    SourceBundleResult,
 )
 from .urls import parse_owner_repo
 
@@ -71,6 +75,10 @@ def _format_error(exc: Exception) -> str:
         "recoverable": False,
         "retry_after": None,
     })
+
+
+def _legacy_tools_enabled() -> bool:
+    return os.environ.get("REPO_FINDER_ENABLE_LEGACY_TOOLS") == "1"
 
 
 @mcp.tool(
@@ -319,3 +327,120 @@ async def deep_inspect_repo(
         raise RuntimeError(_format_error(exc))
 
     return result
+
+
+@mcp.tool()
+async def find_reusable_code(
+    task: Annotated[
+        str,
+        Field(description="Natural language UI reuse task, e.g. 'Next.js data table for admin dashboard'"),
+    ],
+    project_path: Annotated[
+        str | None,
+        Field(description="Optional local target project path for future project profiling"),
+    ] = None,
+    max_repos: Annotated[
+        int,
+        Field(description="Maximum number of reusable code candidates to return", ge=1, le=5),
+    ] = 3,
+) -> FindReusableCodeResult:
+    if not task.strip():
+        raise ToolError("Task description is required.")
+    if project_path:
+        # Reserved for later project profiling; accepted now so the MCP contract is stable.
+        _ = project_path
+
+    results = catalog.search_assets(task, max_repos)
+    signature = catalog.task_signature(task)
+    for result in results:
+        catalog.record_reuse_outcome(
+            asset_id=result.candidate_id,
+            repo_id=result.repo_id,
+            task_signature=signature,
+            outcome="returned",
+        )
+
+    next_steps = []
+    if not results:
+        next_steps.append(
+            "Run repo-finder scout --domain nextjs-ui, qualify, then evidence for the desired capability."
+        )
+    else:
+        next_steps.append("Call get_source_bundle(candidate_id) for the most relevant candidate.")
+
+    return FindReusableCodeResult(
+        task=task,
+        total_candidates=len(results),
+        results=results,
+        timestamp=_now_iso(),
+        next_steps=next_steps,
+    )
+
+
+@mcp.tool()
+async def get_source_bundle(
+    candidate_id: Annotated[
+        str,
+        Field(description="Candidate id returned by find_reusable_code"),
+    ],
+) -> SourceBundleResult:
+    result = bundles.create_source_bundle(candidate_id)
+    catalog.record_reuse_outcome(
+        asset_id=candidate_id,
+        repo_id=result.repo_id,
+        task_signature=candidate_id,
+        outcome="opened_bundle",
+    )
+    return result
+
+
+@mcp.tool()
+async def record_reuse_outcome(
+    candidate_id: Annotated[
+        str,
+        Field(description="Candidate id returned by find_reusable_code"),
+    ],
+    outcome: Annotated[
+        str,
+        Field(
+            description=(
+                "One of: returned, opened_bundle, selected, integrated_successfully, "
+                "rejected_irrelevant, rejected_too_coupled, rejected_low_quality"
+            ),
+        ),
+    ],
+    notes: Annotated[
+        str | None,
+        Field(description="Optional notes about why the candidate succeeded or failed"),
+    ] = None,
+) -> RecordReuseOutcomeResult:
+    asset = catalog.get_asset_detail(candidate_id)
+    if asset is None:
+        raise ToolError(f"Unknown candidate_id: {candidate_id}")
+    try:
+        catalog.record_reuse_outcome(
+            asset_id=candidate_id,
+            repo_id=str(asset["repo_id"]),
+            task_signature=candidate_id,
+            outcome=outcome,
+            notes=notes,
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc))
+    return RecordReuseOutcomeResult(
+        candidate_id=candidate_id,
+        outcome=outcome,
+        recorded=True,
+        timestamp=_now_iso(),
+    )
+
+
+if not _legacy_tools_enabled():
+    for _tool_name in (
+        "find_repos_for_task",
+        "inspect_github_repo",
+        "compare_github_repos",
+        "extract_patterns_from_repo",
+        "deep_inspect_repo",
+    ):
+        mcp.remove_tool(_tool_name)

@@ -1,42 +1,67 @@
 # Project Instructions
 
-Local-first agentic development with a structured Plan → Execute → Review workflow.
+Local-first Codex development for `repo_finder`. Be concise, avoid over-engineering,
+and keep changes focused on the requested outcome.
 
 ## Workflow
 
-1. **Plan** — `/plan` or switch to the plan agent for design and architecture. Never code first.
-2. **Execute** — Delegate implementation steps to the worker agent. One step at a time.
-3. **Review** — `/review` after every meaningful change. Address CRITICAL issues before proceeding.
+1. **Plan first for non-trivial changes.** A short written plan is enough when the
+   direction is clear.
+2. **Implement in small steps.** Prefer existing project patterns over new
+   abstractions.
+3. **Review locally after meaningful changes.** Prioritize correctness, security,
+   edge cases, and missing tests.
+4. **Verify before done.** Run linting, type-checking, and tests unless explicitly
+   impossible.
 
-## Agents
+## Review Policy
 
-| Agent | Mode | Model | Use for |
-|-------|------|-------|---------|
-| plan | primary | deepseek-v4-pro | System design, architecture, planning |
-| ask | primary | deepseek-v4-flash | Code explanation, questions, research |
-| reviewer | subagent | deepseek-v4-pro | Code review (read-only) |
-| worker | subagent | deepseek-v4-flash | Implementation of defined tasks |
-| code (default) | primary | deepseek-v4-flash | Execution orchestration, delegating to worker |
-| explore | subagent | deepseek-v4-flash | Codebase exploration, searching |
+This is a single-developer project. Reviews are local/manual through Codex or
+direct code inspection only. Do **not** use CodeRabbit, `coderabbit`, or any
+external/hosted PR review service.
 
-## Skills
+## Current Direction
 
-Add project-specific skills to `.kilo/skills/`. Each skill is a directory with a `SKILL.md` file. The directory name becomes the skill identifier (`/skill <name>`). Skills should encode patterns the LLM cannot infer from your codebase — skip anything generic (debugging, TDD, code review). An example stub is provided in `.kilo/skills/example/`.
+The product direction is a catalog-first local reuse layer for Next.js/React UI
+code. Keep the full design reference in `docs/repo-finder-direction.md`.
+
+Near-term priorities:
+
+1. Make the deterministic catalog pipeline useful end-to-end.
+2. Improve evidence quality before adding more model complexity.
+3. Add Gemma/FastContext only after baseline shortlist quality is measured.
+
+## Engineering Constraints
+
+- Do not add dependencies without discussion.
+- Do not refactor unrelated code.
+- Do not leave debug logs, TODO comments, or commented-out code.
+- Do not execute arbitrary cloned repository code.
+- Tie source analysis to exact commit SHAs.
+- Keep local generated data under `.repo_finder/`.
+- Keep all model outputs versioned by model, prompt, schema, and analyzer version.
+
+## Quality Checks
+
+Use the local checks as the source of truth:
+
+```powershell
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy src
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+For corpus quality checks:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_quality_checks.py
+```
 
 ## Continuous Improvement Loop
 
-1. **Weekly quality check** — `scripts/run_quality_checks.py` runs against the ground-truth corpus, reports pass/fail per repo.
-2. **Review findings** — Integration test failures indicate stale ground truth (repos change over time) or regressions in the code.
-3. **Adjust weights** — Ranker weights are configurable via `RANKER_WEIGHT_*` env vars. No code change needed.
-4. **Fix framework detection** — `_FRAMEWORK_MARKERS` in `framework_detector.py` accepts new markers.
-5. **Tune thresholds** — Verdict thresholds in `ranker.py`, `repo_inspector.py`, and `pattern_extractor.py` are hardcoded constants.
-6. **Update corpus** — When ground truth becomes stale (e.g., license or stars changed), update `tests/corpus/ground_truth.json`.
-7. **Commit fixes** — The CI workflow validates the fix.
-
-## Do NOT
-
-- **Do not jump to implementation without a plan.** Non-trivial changes require a written plan first.
-- **Do not add dependencies or libraries without discussion.**
-- **Do not refactor unrelated code.**
-- **Do not leave debug logs, TODO comments, or commented-out code.**
-- **Do not skip linting, type-checking, or tests.** Work is not done until all three pass. After 2 failed fix attempts, escalate.
+1. Run `scripts/run_quality_checks.py` against the ground-truth corpus.
+2. Review failures as either stale ground truth or regressions.
+3. Adjust ranker weights through `RANKER_WEIGHT_*` env vars when possible.
+4. Fix framework detection in `_FRAMEWORK_MARKERS` when stack signals are missing.
+5. Tune hardcoded thresholds only when tests or real catalog runs justify it.
+6. Update `tests/corpus/ground_truth.json` when repository metadata changes.

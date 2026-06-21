@@ -1,5 +1,8 @@
 # Requirements: GitHub Project Finder MCP
 
+> Historical MVP requirements. The active product direction is the catalog-first
+> Next.js/React UI reuse layer described in `docs/repo-finder-direction.md`.
+
 ## Functional Requirements
 
 ### Tool 1: `find_repos_for_task`

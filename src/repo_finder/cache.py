@@ -48,7 +48,7 @@ def cache_get(key: str) -> dict[str, Any] | None:
 
     now = datetime.now(UTC)
     age_seconds = (now - created_at_dt).total_seconds()
-    if age_seconds > ttl_seconds:
+    if age_seconds >= ttl_seconds:
         conn.execute("DELETE FROM cache WHERE key = ?", [key])
         return None
 

@@ -1,5 +1,8 @@
 # Architecture: GitHub Project Finder MCP
 
+> Historical MVP architecture. The active architecture direction is the
+> catalog-first reuse layer described in `docs/repo-finder-direction.md`.
+
 ## File Tree
 
 ```
@@ -10,7 +13,7 @@ src/repo_finder/
     ranker.py              # Multi-factor repo scoring (pure functions)
     repo_inspector.py      # Deep repo analysis (uses client + ranker)
     pattern_extractor.py   # README + file tree pattern extraction
-    server.py              # FastMCP server + 4 tool definitions
+    server.py              # FastMCP server + tool definitions
     __main__.py            # CLI entry point
 tests/
     conftest.py            # Pytest fixtures (GITHUB_TOKEN gate)
@@ -30,7 +33,7 @@ docs/
 
 ```
 ┌─────────────────────────────────────────────────┐
-│              MCP Client (Kilo Agent)             │
+│              MCP Client / Coding Agent           │
 │   find_repos → inspect → compare → extract       │
 └──────────────────┬──────────────────────────────┘
                    │ JSON-RPC (stdio)

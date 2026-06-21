@@ -1,0 +1,40 @@
+# Development Notes
+
+Useful implementation notes preserved from the old agent-specific setup.
+
+## FastMCP
+
+- Define tools with `@mcp.tool()` and use `annotations={"readOnlyHint": True}`
+  only for tools that do not write files, mutate the catalog, or record outcomes.
+- Prefer `Annotated[..., Field(...)]` for tool parameters so MCP clients get clear
+  schemas.
+- Return project dataclasses from `models.py` for structured tool output.
+- Use `ToolError` for user-correctable validation errors.
+- Use structured runtime errors for recoverable system failures such as rate
+  limits.
+
+## GitHub API
+
+- Repository search uses `GET /search/repositories` with query qualifiers such as
+  `language:`, `topic:`, `pushed:`, `archived:false`, `is:public`, and
+  `in:name,description,topics,readme`.
+- Authenticated search has tighter search-specific limits than normal REST calls;
+  keep scouting offline/batched rather than per MCP request.
+- Treat GitHub language metadata as a signal only. Confirm stack via manifests,
+  config files, and local source snapshots.
+- Resolve and store the exact default-branch commit SHA before analysis.
+
+## Local Snapshots
+
+- Clone or fetch by commit SHA, not moving branch names.
+- Never execute code from cloned repositories.
+- Store generated catalog data under `.repo_finder/`.
+- Garbage-collect old snapshots through `repo-finder gc`.
+
+## Model Runtime
+
+- LM Studio is the intended local OpenAI-compatible endpoint.
+- Default endpoint: `http://localhost:1234/v1`.
+- Gemma is for JSON profiling/synthesis after deterministic evidence exists.
+- FastContext is for evidence refinement over read-only `READ`, `GLOB`, and
+  `GREP`-style tools, not general code generation.

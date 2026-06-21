@@ -70,12 +70,14 @@ class GitHubClient:
         per_page: int = 30,
         sort: str = "stars",
         order: str = "desc",
+        page: int = 1,
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {
             "q": query,
             "sort": sort,
             "order": order,
             "per_page": per_page,
+            "page": page,
         }
         url = f"{API_BASE}/search/repositories"
         data = await self._get(url, params=params)
@@ -111,6 +113,22 @@ class GitHubClient:
         params: dict[str, Any] = {"per_page": per_page}
         url = f"{API_BASE}/repos/{owner}/{repo}/commits"
         return await self._get(url, params=params)  # type: ignore[no-any-return]
+
+    async def get_default_branch_commit(
+        self, owner: str, repo: str, branch: str
+    ) -> str:
+        enc_branch = quote(branch, safe="")
+        url = f"{API_BASE}/repos/{owner}/{repo}/branches/{enc_branch}"
+        data = await self._get(url)
+        commit = data.get("commit", {})
+        sha = commit.get("sha")
+        if not sha:
+            commits = await self.get_commits(owner, repo, per_page=1)
+            if commits:
+                sha = commits[0].get("sha")
+        if not sha:
+            raise ValueError(f"Could not resolve default branch commit for {owner}/{repo}")
+        return str(sha)
 
     async def get_repo_contents(
         self, owner: str, repo: str, path: str = ""
