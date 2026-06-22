@@ -137,6 +137,7 @@ class ReusableCandidate:
     commit_sha: str
     capability: str
     score: float
+    task_signature: str = ""
     entry_paths: list[str] = field(default_factory=list)
     dependency_paths: list[str] = field(default_factory=list)
     external_dependencies: list[str] = field(default_factory=list)
@@ -147,6 +148,7 @@ class ReusableCandidate:
 @dataclass
 class FindReusableCodeResult:
     task: str
+    task_signature: str
     total_candidates: int
     results: list[ReusableCandidate]
     timestamp: str
@@ -156,6 +158,7 @@ class FindReusableCodeResult:
 @dataclass
 class SourceBundleResult:
     candidate_id: str
+    task_signature: str
     repo_id: str
     commit_sha: str
     bundle_path: str
@@ -170,6 +173,7 @@ class SourceBundleResult:
 @dataclass
 class RecordReuseOutcomeResult:
     candidate_id: str
+    task_signature: str
     outcome: str
     recorded: bool
     timestamp: str

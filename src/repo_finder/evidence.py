@@ -85,21 +85,34 @@ NOISY_FILE_STEMS = {
 }
 CAPABILITY_PATH_HINTS: dict[str, set[str]] = {
     "data-table": {"data-table", "datatable", "table", "tables", "columns", "grid"},
-    "command-palette": {"command", "cmdk", "palette", "combobox"},
+    "command-palette": {"command", "cmdk", "palette", "combobox", "quick-search"},
     "auth-ui": {"auth", "login", "signin", "signup", "password"},
     "settings": {"settings", "profile", "account", "preferences"},
     "dashboard": {"dashboard", "admin", "overview"},
     "forms": {"form", "forms", "validation"},
-    "file-upload": {"upload", "dropzone", "file"},
+    "file-upload": {"upload", "dropzone", "file", "attachment"},
     "charts": {"chart", "charts", "graph", "analytics"},
     "navigation": {"navigation", "navbar", "sidebar", "menu", "layout"},
     "admin-interface": {"admin", "dashboard", "settings", "table"},
     "route-handlers": {"api", "route", "routes", "handler", "handlers", "endpoint"},
-    "server-actions": {"actions", "action", "server-action"},
+    "server-actions": {"actions", "server-action", "use-server"},
     "auth-middleware": {"auth", "session", "sessions", "middleware", "login"},
     "trpc-router": {"trpc", "router", "routers", "procedure"},
     "data-access": {"db", "database", "drizzle", "prisma", "schema", "queries"},
-    "file-storage": {"upload", "storage", "drive", "blob", "file"},
+    "file-storage": {
+        "attachment",
+        "attachments",
+        "blob",
+        "document",
+        "documents",
+        "drive",
+        "media",
+        "r2",
+        "s3",
+        "storage",
+        "upload",
+        "uploads",
+    },
     "email-webhooks": {"email", "webhook", "message", "handler"},
     "background-jobs": {"worker", "job", "cron", "schedule", "sync", "queue"},
     "validation-schemas": {"validation", "schema", "schemas", "zod", "resolver"},
@@ -107,9 +120,24 @@ CAPABILITY_PATH_HINTS: dict[str, set[str]] = {
 }
 CAPABILITY_STRONG_CONTENT: dict[str, set[str]] = {
     "data-table": {"@tanstack/react-table", "usereacttable", "columndef", "getrowmodel"},
-    "command-palette": {"cmdk", "commanddialog", "commandinput"},
+    "command-palette": {
+        "@base-ui/react",
+        "cmdk",
+        "comboboxprimitive",
+        "commanddialog",
+        "commandinput",
+    },
     "forms": {"react-hook-form", "useform", "zodresolver"},
-    "file-upload": {"react-dropzone", "usedropzone"},
+    "file-upload": {
+        "datatransfer",
+        "formdata",
+        "input type=\"file\"",
+        "ondrop",
+        "react-dropzone",
+        "setprogress",
+        "type=\"file\"",
+        "usedropzone",
+    },
     "charts": {"recharts", "responsivecontainer", "chartcontainer"},
     "route-handlers": {
         "nextrequest",
@@ -117,11 +145,29 @@ CAPABILITY_STRONG_CONTENT: dict[str, set[str]] = {
         "export async function get",
         "export async function post",
     },
-    "server-actions": {"use server", "server action"},
+    "server-actions": {"use server", "server action", "revalidatepath", "redirect("},
     "auth-middleware": {"getserversession", "nextauth", "authoptions", "middleware"},
-    "trpc-router": {"@trpc/server", "createtrpc", "publicprocedure", "protectedprocedure"},
+    "trpc-router": {
+        "@trpc/server",
+        "createtrpc",
+        "fetchrequesthandler",
+        "inittrpc",
+        "protectedprocedure",
+        "publicprocedure",
+    },
     "data-access": {"drizzle-orm", "pgtable", "prisma", "sql`"},
-    "file-storage": {"uploadfile", "googleapis", "blob", "multipart"},
+    "file-storage": {
+        "@aws-sdk/client-s3",
+        "@vercel/blob",
+        "drive.files",
+        "file.arraybuffer",
+        "formdata",
+        "googleapis",
+        "multipart",
+        "putobjectcommand",
+        "s3client",
+        "uploadfile",
+    },
     "email-webhooks": {"webhook", "email", "message", "mailbox"},
     "background-jobs": {"cron", "queue", "worker", "schedule", "sync"},
     "validation-schemas": {"z.object", "zod", "schema", "resolver"},
@@ -130,21 +176,47 @@ CAPABILITY_STRONG_CONTENT: dict[str, set[str]] = {
 
 CAPABILITY_TERMS: dict[str, list[str]] = {
     "data-table": ["data table", "datatable", "table", "tanstack", "columns"],
-    "command-palette": ["command palette", "cmdk", "command", "combobox"],
+    "command-palette": ["command palette", "cmdk", "command", "combobox", "quick search"],
     "auth-ui": ["auth", "login", "sign in", "signin", "signup", "password"],
     "settings": ["settings", "profile", "account", "preferences"],
     "dashboard": ["dashboard", "sidebar", "admin", "overview"],
     "forms": ["form", "react-hook-form", "zod", "validation"],
-    "file-upload": ["upload", "dropzone", "file input", "progress"],
+    "file-upload": ["upload", "dropzone", "file input", "progress", "attachment", "drag", "drop"],
     "charts": ["chart", "recharts", "visx", "nivo", "graph"],
     "navigation": ["navigation", "navbar", "sidebar", "menu"],
     "admin-interface": ["admin", "dashboard", "table", "settings"],
     "route-handlers": ["route handler", "api route", "nextrequest", "nextresponse", "route.ts"],
-    "server-actions": ["server action", "use server", "actions.ts", "action"],
+    "server-actions": [
+        "server action",
+        "server actions",
+        "use server",
+        "actions.ts",
+        "revalidatepath",
+    ],
     "auth-middleware": ["auth", "middleware", "session", "nextauth", "login"],
-    "trpc-router": ["trpc", "router", "procedure", "@trpc/server"],
+    "trpc-router": [
+        "@trpc/server",
+        "inittrpc",
+        "protectedprocedure",
+        "publicprocedure",
+        "trpc router",
+        "trpc",
+    ],
     "data-access": ["drizzle", "prisma", "database", "schema", "db"],
-    "file-storage": ["upload", "storage", "drive", "blob", "file"],
+    "file-storage": [
+        "file upload",
+        "object storage",
+        "blob storage",
+        "google drive",
+        "drive.files",
+        "multipart",
+        "formdata",
+        "upload",
+        "storage",
+        "blob",
+        "r2",
+        "s3",
+    ],
     "email-webhooks": ["email", "webhook", "message", "handler"],
     "background-jobs": ["worker", "job", "cron", "schedule", "sync", "queue"],
     "validation-schemas": ["validation", "schema", "zod", "resolver"],
@@ -153,6 +225,7 @@ CAPABILITY_TERMS: dict[str, list[str]] = {
 
 RELEVANT_DEPENDENCIES = {
     "@hookform/resolvers",
+    "@base-ui/react",
     "@radix-ui/react-accordion",
     "@radix-ui/react-dialog",
     "@radix-ui/react-dropdown-menu",
@@ -161,11 +234,17 @@ RELEVANT_DEPENDENCIES = {
     "@radix-ui/react-select",
     "@radix-ui/react-slot",
     "@radix-ui/react-tabs",
+    "@aws-sdk/client-s3",
     "@tanstack/react-table",
+    "@trpc/client",
+    "@trpc/react-query",
     "@trpc/server",
+    "@supabase/supabase-js",
+    "@vercel/blob",
     "class-variance-authority",
     "cmdk",
     "drizzle-orm",
+    "firebase",
     "googleapis",
     "jspdf",
     "lucide-react",
@@ -179,6 +258,7 @@ RELEVANT_DEPENDENCIES = {
     "react-hook-form",
     "recharts",
     "resend",
+    "uploadthing",
     "tailwind-merge",
     "tailwindcss",
     "xlsx",
@@ -285,6 +365,24 @@ def _strong_content_hits(content: str, capability: str) -> int:
     return sum(1 for term in CAPABILITY_STRONG_CONTENT.get(capability, set()) if term in lowered)
 
 
+def _server_action_file_signal(rel_path: str, searchable: str) -> bool:
+    path = rel_path.replace("\\", "/").lower()
+    if '"use server"' in searchable or "'use server'" in searchable:
+        return True
+    parts = set(path.split("/"))
+    noisy_parts = {"__tests__", "components", "e2e", "hooks", "test", "tests"}
+    if parts & noisy_parts:
+        return False
+    return (
+        "/_actions/" in path
+        or "/actions/" in path
+        or path.endswith("/actions.ts")
+        or path.endswith("/actions.tsx")
+        or path.endswith("/action.ts")
+        or path.endswith("/action.tsx")
+    )
+
+
 def _line_citations(rel_path: str, content: str, terms: list[str], max_ranges: int = 3) -> list[str]:
     lines = content.splitlines()
     citations: list[str] = []
@@ -351,6 +449,11 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         ui_score = _ui_path_score(rel_path, normalized)
         noise_penalty = _noise_penalty(rel_path, normalized)
         strong_hits = _strong_content_hits(searchable, normalized)
+        if normalized == "server-actions" and not _server_action_file_signal(
+            rel_path,
+            searchable,
+        ):
+            continue
         score = float(term_hits) + (ui_score * 4) + (strong_hits * 3)
         if path.name == "package.json":
             score += sum(1 for dep in relevant_dependencies if dep.lower() in searchable)
@@ -404,6 +507,10 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         adaptation_notes.append(
             "Command palettes usually depend on cmdk plus dialog/popover primitives."
         )
+    if "@base-ui/react" in relevant_dependencies and normalized == "command-palette":
+        adaptation_notes.append(
+            "Base UI combobox primitives can be reused as command-style quick search controls."
+        )
     if any("@/" in citation for citation in evidence_paths):
         adaptation_notes.append(
             "Replace source alias imports such as '@/...' with the target project's path aliases."
@@ -447,7 +554,12 @@ def run_evidence(capability: str, limit: int) -> dict[str, int]:
     stored = 0
     skipped = 0
     normalized = normalize_capability(capability)
-    for snapshot in catalog.list_snapshots_for_evidence(limit):
+    snapshots = catalog.list_snapshots_for_evidence(limit)
+    catalog.delete_assets_for_snapshots(
+        normalized,
+        [str(snapshot["snapshot_id"]) for snapshot in snapshots],
+    )
+    for snapshot in snapshots:
         root = Path(str(snapshot["snapshot_path"]))
         if not root.exists():
             skipped += 1

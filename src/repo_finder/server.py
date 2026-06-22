@@ -353,6 +353,8 @@ async def find_reusable_code(
     results = catalog.search_assets(task, max_repos)
     signature = catalog.task_signature(task)
     for result in results:
+        result.task_signature = signature
+    for result in results:
         catalog.record_reuse_outcome(
             asset_id=result.candidate_id,
             repo_id=result.repo_id,
@@ -366,10 +368,13 @@ async def find_reusable_code(
             "Run repo-finder scout --domain nextjs-ui, qualify, then evidence for the desired capability."
         )
     else:
-        next_steps.append("Call get_source_bundle(candidate_id) for the most relevant candidate.")
+        next_steps.append(
+            "Call get_source_bundle(candidate_id, task_signature) for the most relevant candidate."
+        )
 
     return FindReusableCodeResult(
         task=task,
+        task_signature=signature,
         total_candidates=len(results),
         results=results,
         timestamp=_now_iso(),
@@ -383,12 +388,18 @@ async def get_source_bundle(
         str,
         Field(description="Candidate id returned by find_reusable_code"),
     ],
+    task_signature: Annotated[
+        str,
+        Field(description="Task signature returned by find_reusable_code"),
+    ],
 ) -> SourceBundleResult:
-    result = bundles.create_source_bundle(candidate_id)
+    if not task_signature.strip():
+        raise ToolError("task_signature is required.")
+    result = bundles.create_source_bundle(candidate_id, task_signature)
     catalog.record_reuse_outcome(
         asset_id=candidate_id,
         repo_id=result.repo_id,
-        task_signature=candidate_id,
+        task_signature=task_signature,
         outcome="opened_bundle",
     )
     return result
@@ -399,6 +410,10 @@ async def record_reuse_outcome(
     candidate_id: Annotated[
         str,
         Field(description="Candidate id returned by find_reusable_code"),
+    ],
+    task_signature: Annotated[
+        str,
+        Field(description="Task signature returned by find_reusable_code"),
     ],
     outcome: Annotated[
         str,
@@ -414,6 +429,8 @@ async def record_reuse_outcome(
         Field(description="Optional notes about why the candidate succeeded or failed"),
     ] = None,
 ) -> RecordReuseOutcomeResult:
+    if not task_signature.strip():
+        raise ToolError("task_signature is required.")
     asset = catalog.get_asset_detail(candidate_id)
     if asset is None:
         raise ToolError(f"Unknown candidate_id: {candidate_id}")
@@ -421,7 +438,7 @@ async def record_reuse_outcome(
         catalog.record_reuse_outcome(
             asset_id=candidate_id,
             repo_id=str(asset["repo_id"]),
-            task_signature=candidate_id,
+            task_signature=task_signature,
             outcome=outcome,
             notes=notes,
         )
@@ -429,6 +446,7 @@ async def record_reuse_outcome(
         raise ToolError(str(exc))
     return RecordReuseOutcomeResult(
         candidate_id=candidate_id,
+        task_signature=task_signature,
         outcome=outcome,
         recorded=True,
         timestamp=_now_iso(),

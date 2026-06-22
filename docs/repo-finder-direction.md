@@ -29,7 +29,7 @@ AI-kodningsagent
    │       ↓
    │   FastContext + Gemma/RLM på de bästa kandidaterna
    │
-   └── get_source_bundle(candidate_id)
+   └── get_source_bundle(candidate_id, task_signature)
            ↓
        filer + beroenden + commit-SHA + anpassningsråd
            ↓
@@ -42,9 +42,9 @@ En minimal MCP-yta bör bestå av tre verktyg:
 
 | Verktyg | Syfte |
 |---|---|
-| `find_reusable_code(task, project_path, max_repos=3)` | Hitta kompatibla implementationer |
-| `get_source_bundle(candidate_id)` | Hämta exakta filer, beroenden, commit-SHA och noter |
-| `record_reuse_outcome(candidate_id, outcome)` | Mata tillbaka utfall till rankningen |
+| `find_reusable_code(task, project_path, max_repos=3)` | Hitta kompatibla implementationer och returnera `task_signature` |
+| `get_source_bundle(candidate_id, task_signature)` | Hämta exakta filer, beroenden, commit-SHA och noter för ursprungsuppgiften |
+| `record_reuse_outcome(candidate_id, task_signature, outcome)` | Mata tillbaka utfall till rankningen per ursprungsuppgift |
 
 Det viktiga för användbarheten är att **svaren är handlingsbara**. Resultatet ska inte vara “denna repo verkar bra”, utan snarare: *använd `components/data-table.tsx`, `hooks/use-table.ts`, lägg till `@tanstack/react-table`, och var uppmärksam på att server actions är app-specifika*.
 
@@ -259,7 +259,11 @@ CREATE TABLE repositories (
   stars INTEGER,
   forks INTEGER,
   license_spdx TEXT,
+  repo_size_kb INTEGER,
+  repo_created_at TEXT,
   pushed_at TIMESTAMP,
+  is_fork BOOLEAN,
+  is_template BOOLEAN,
   discovered_at TIMESTAMP NOT NULL,
   source_channel TEXT NOT NULL
 );

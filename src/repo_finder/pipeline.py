@@ -6,10 +6,10 @@ from typing import Any, cast
 from fastmcp.exceptions import ToolError
 
 from . import catalog, snapshotter
-from .constants import MAX_REPOSITORY_SIZE_KB, SKIP_DIRS
+from .constants import MAX_REPO_AGE_DAYS, MAX_REPOSITORY_SIZE_KB, MAX_STALE_DAYS, SKIP_DIRS
 from .github_client import get_client
 
-UI_RECENCY_DAYS = 180
+UI_RECENCY_DAYS = MAX_STALE_DAYS
 CARD_VERSION = "repo-card-v1"
 SOURCE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx"}
 GENERATED_VENDOR_DIRS = {
@@ -49,15 +49,19 @@ def recency_cutoff(days: int = UI_RECENCY_DAYS) -> str:
 
 
 def build_nextjs_ui_queries() -> list[tuple[str, str]]:
-    cutoff = recency_cutoff()
+    created_cutoff = recency_cutoff(MAX_REPO_AGE_DAYS)
+    pushed_cutoff = recency_cutoff(MAX_STALE_DAYS)
     queries: list[tuple[str, str]] = []
     qualifiers = (
         "in:name,description,topics,readme "
         "language:TypeScript "
         "archived:false "
+        "mirror:false "
+        "template:false "
         "is:public "
         f"size:<={MAX_REPOSITORY_SIZE_KB} "
-        f"pushed:>={cutoff}"
+        f"created:>={created_cutoff} "
+        f"pushed:>={pushed_cutoff}"
     )
     for capability, terms in NEXTJS_UI_CAPABILITIES.items():
         queries.append((capability, f"{terms} {qualifiers}"))
@@ -99,12 +103,12 @@ def _parse_time(value: str | None) -> datetime | None:
         return None
 
 
-def _recent_enough(pushed_at: str | None) -> bool:
-    pushed = _parse_time(pushed_at)
-    if pushed is None:
+def _within_days(value: str | None, days: int) -> bool:
+    parsed = _parse_time(value)
+    if parsed is None:
         return False
-    cutoff = datetime.now(UTC) - timedelta(days=UI_RECENCY_DAYS)
-    return pushed >= cutoff
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    return parsed >= cutoff
 
 
 def _repo_size_kb(metadata: dict[str, Any]) -> int | None:
@@ -124,10 +128,20 @@ def _passes_metadata_gates(metadata: dict[str, Any]) -> tuple[bool, str]:
         return False, "archived"
     if metadata.get("mirror_url"):
         return False, "mirror"
+    if bool(metadata.get("fork", False)):
+        return False, "fork"
+    if bool(metadata.get("is_template", False)):
+        return False, "template"
     size_kb = _repo_size_kb(metadata)
     if size_kb is not None and size_kb > MAX_REPOSITORY_SIZE_KB:
         return False, "too large"
-    if not _recent_enough(str(metadata.get("pushed_at") or "")):
+    if not metadata.get("created_at"):
+        return False, "missing created_at"
+    if not _within_days(str(metadata.get("created_at") or ""), MAX_REPO_AGE_DAYS):
+        return False, "too old"
+    if not metadata.get("pushed_at"):
+        return False, "missing pushed_at"
+    if not _within_days(str(metadata.get("pushed_at") or ""), MAX_STALE_DAYS):
         return False, "stale"
     return True, "metadata qualified"
 

@@ -2,12 +2,13 @@ import hashlib
 import json
 import os
 import shutil
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import duckdb
 
-from .constants import MAX_REPOSITORY_SIZE_KB, _now_iso
+from .constants import MAX_REPO_AGE_DAYS, MAX_REPOSITORY_SIZE_KB, MAX_STALE_DAYS, _now_iso
 from .models import ReusableCandidate
 
 ANALYZER_VERSION = "deterministic-ui-v1"
@@ -35,6 +36,12 @@ BACKEND_CAPABILITIES = {
     "background-jobs",
     "validation-schemas",
     "admin-export",
+}
+COMMAND_PALETTE_DEPENDENCIES = {
+    "@ariakit/react",
+    "@base-ui/react",
+    "cmdk",
+    "react-aria-components",
 }
 BACKEND_PATH_PARTS = {
     "actions",
@@ -64,7 +71,20 @@ BACKEND_CAPABILITY_PATH_TERMS = {
     "auth-middleware": {"auth", "middleware", "session", "sessions", "login"},
     "trpc-router": {"trpc", "router", "routers"},
     "data-access": {"db", "database", "drizzle", "prisma", "schema", "schemas"},
-    "file-storage": {"upload", "storage", "drive", "blob", "file"},
+    "file-storage": {
+        "attachment",
+        "attachments",
+        "blob",
+        "document",
+        "documents",
+        "drive",
+        "media",
+        "r2",
+        "s3",
+        "storage",
+        "upload",
+        "uploads",
+    },
     "email-webhooks": {"email", "webhook", "webhooks", "message", "handler"},
     "background-jobs": {"cron", "inngest", "job", "jobs", "processor", "queue", "sync", "worker"},
     "validation-schemas": {"schema", "schemas", "validation", "zod", "resolver"},
@@ -194,12 +214,18 @@ def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
             forks INTEGER,
             license_spdx TEXT,
             repo_size_kb INTEGER,
+            repo_created_at TEXT,
             pushed_at TEXT,
+            is_fork BOOLEAN,
+            is_template BOOLEAN,
             discovered_at TEXT NOT NULL,
             source_channel TEXT NOT NULL
         )
     """)
     _ensure_column(active, "repositories", "repo_size_kb", "INTEGER")
+    _ensure_column(active, "repositories", "repo_created_at", "TEXT")
+    _ensure_column(active, "repositories", "is_fork", "BOOLEAN")
+    _ensure_column(active, "repositories", "is_template", "BOOLEAN")
     active.execute("""
         CREATE TABLE IF NOT EXISTS snapshots (
             snapshot_id TEXT PRIMARY KEY,
@@ -285,6 +311,12 @@ def _hash_id(*parts: str) -> str:
     return hashlib.sha256(":".join(parts).encode()).hexdigest()[:24]
 
 
+def _cutoff_date(days: int) -> str:
+    cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff = cutoff - timedelta(days=days)
+    return cutoff.strftime("%Y-%m-%d")
+
+
 def _ensure_column(
     conn: duckdb.DuckDBPyConnection,
     table_name: str,
@@ -343,9 +375,10 @@ def upsert_repository(raw_repo: dict[str, Any], source_channel: str) -> str:
         INSERT OR REPLACE INTO repositories (
             repo_id, owner, name, html_url, description, default_branch,
             is_public, is_archived, is_mirror, detected_languages, topics,
-            stars, forks, license_spdx, repo_size_kb, pushed_at, discovered_at, source_channel
+            stars, forks, license_spdx, repo_size_kb, repo_created_at, pushed_at,
+            is_fork, is_template, discovered_at, source_channel
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             repo_id,
@@ -363,7 +396,10 @@ def upsert_repository(raw_repo: dict[str, Any], source_channel: str) -> str:
             int(raw_repo.get("forks_count", 0) or 0),
             license_spdx,
             _int_or_none(raw_repo.get("size")),
+            raw_repo.get("created_at"),
             raw_repo.get("pushed_at"),
+            bool(raw_repo.get("fork", False)),
+            bool(raw_repo.get("is_template", False)),
             _now_iso(),
             source_channel,
         ],
@@ -389,6 +425,9 @@ def list_repositories_for_qualification(limit: int) -> list[dict[str, Any]]:
         SELECT * FROM repositories
         WHERE is_public = true
             AND is_archived = false
+            AND (is_mirror IS NULL OR is_mirror = false)
+            AND (is_fork IS NULL OR is_fork = false)
+            AND (is_template IS NULL OR is_template = false)
             AND (repo_size_kb IS NULL OR repo_size_kb <= ?)
         ORDER BY COALESCE(stars, 0) DESC, discovered_at DESC
         LIMIT ?
@@ -587,6 +626,16 @@ def upsert_asset(
     return asset_id
 
 
+def delete_assets_for_snapshots(capability: str, snapshot_ids: list[str]) -> None:
+    if not snapshot_ids:
+        return
+    placeholders = ", ".join("?" for _ in snapshot_ids)
+    get_connection().execute(
+        f"DELETE FROM assets WHERE capability = ? AND snapshot_id IN ({placeholders})",
+        [capability, *snapshot_ids],
+    )
+
+
 def get_asset_detail(asset_id: str) -> dict[str, Any] | None:
     conn = get_connection()
     row = conn.execute(
@@ -627,11 +676,15 @@ def _capability_terms(capability: str) -> set[str]:
     if capability == "command-palette":
         terms.update({"cmdk", "command", "palette"})
     if capability == "trpc-router":
-        terms.update({"trpc", "router"})
+        terms.update({"inittrpc", "procedure", "protectedprocedure", "publicprocedure", "trpc"})
     if capability == "data-access":
         terms.update({"drizzle", "prisma", "database", "schema"})
     if capability == "auth-middleware":
         terms.update({"auth", "session", "middleware"})
+    if capability == "server-actions":
+        terms.update({"actions", "revalidatepath", "server"})
+    if capability == "file-storage":
+        terms.update({"blob", "drive", "multipart", "r2", "s3", "storage", "upload"})
     return {term for term in terms if len(term) > 2}
 
 
@@ -727,6 +780,11 @@ def _all_path_tokens(paths: list[Any]) -> set[str]:
     return tokens
 
 
+def _paths_contain_any(paths: list[Any], terms: set[str]) -> bool:
+    joined = " ".join(str(path).replace("\\", "/").lower() for path in paths)
+    return any(term in joined for term in terms)
+
+
 def _backend_path_alignment_score(capability: str, paths: list[Any]) -> float:
     if capability not in BACKEND_CAPABILITIES:
         return 0.0
@@ -774,27 +832,39 @@ def _capability_intent_scores(task: str) -> dict[str, float]:
 
 def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
     conn = get_connection()
+    created_cutoff = _cutoff_date(MAX_REPO_AGE_DAYS)
+    pushed_cutoff = _cutoff_date(MAX_STALE_DAYS)
     rows = conn.execute(
         """
         SELECT
             a.asset_id, a.repo_id, a.capability, a.entry_paths,
             a.dependency_paths, a.external_dependencies, a.evidence_paths,
             a.synthesis, a.reuse_score, s.commit_sha, r.html_url,
-            r.is_public, r.is_archived, r.repo_size_kb, c.gemma_profile
+            r.is_public, r.is_archived, r.repo_size_kb, r.repo_created_at,
+            r.pushed_at, c.gemma_profile
         FROM assets a
         JOIN snapshots s ON s.snapshot_id = a.snapshot_id
         JOIN repositories r ON r.repo_id = a.repo_id
         LEFT JOIN repository_cards c ON c.snapshot_id = a.snapshot_id
         WHERE r.is_public = true
             AND r.is_archived = false
+            AND (r.is_mirror IS NULL OR r.is_mirror = false)
+            AND (r.is_fork IS NULL OR r.is_fork = false)
+            AND (r.is_template IS NULL OR r.is_template = false)
             AND (r.repo_size_kb IS NULL OR r.repo_size_kb <= ?)
+            AND r.repo_created_at IS NOT NULL
+            AND r.repo_created_at >= ?
+            AND r.pushed_at IS NOT NULL
+            AND r.pushed_at >= ?
         """,
-        [MAX_REPOSITORY_SIZE_KB],
+        [MAX_REPOSITORY_SIZE_KB, created_cutoff, pushed_cutoff],
     ).fetchall()
     columns = [str(c[0]) for c in conn.description]
     task_terms = _task_terms(task)
+    signature = task_signature(task)
     intent_scores = _capability_intent_scores(task)
     best_intent_score = max(intent_scores.values(), default=0.0)
+    primary_intent = max(intent_scores.items(), key=lambda item: item[1], default=("", 0.0))[0]
 
     scored: list[tuple[float, ReusableCandidate]] = []
     for row in rows:
@@ -838,17 +908,67 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         )
         if best_intent_score >= 0.35 and capability_intent_score < best_intent_score * 0.75:
             score -= 0.32
+        if (
+            primary_intent in BACKEND_CAPABILITIES
+            and best_intent_score >= 0.7
+            and capability != primary_intent
+        ):
+            score -= 0.22
         if best_intent_score >= 0.7 and capability in UI_CAPABILITIES and capability_intent_score < 0.35:
             score -= 0.18
         if capability == "data-table" and "@tanstack/react-table" not in external_dependencies:
             score -= (1 - capability_path_score) * 0.12
-        if capability == "trpc-router" and "@trpc/server" not in external_dependencies:
-            score -= 0.35
-        if capability == "data-access" and not (
-            {"drizzle-orm", "prisma", "@prisma/client"} & set(external_dependencies)
-            or capability_path_score >= 0.5
+        if capability == "command-palette":
+            dependency_set = set(external_dependencies)
+            has_command_dependency = bool(COMMAND_PALETTE_DEPENDENCIES & dependency_set)
+            if has_command_dependency:
+                score += 0.12
+            elif capability_path_score <= 0:
+                score -= 0.42
+            else:
+                score += 0.04
+        if capability == "server-actions" and not _paths_contain_any(
+            entry_paths + evidence_paths,
+            {"actions", "server-action"},
         ):
-            score -= 0.2
+            score -= 0.3
+        if capability == "trpc-router":
+            has_trpc_dependency = "@trpc/server" in external_dependencies
+            has_trpc_path = _paths_contain_any(entry_paths + evidence_paths, {"trpc"})
+            if has_trpc_dependency and has_trpc_path:
+                score += 0.18
+            elif not has_trpc_dependency:
+                score -= 0.6
+        if capability == "data-access":
+            db_dependencies = {"drizzle-orm", "prisma", "@prisma/client"} & set(
+                external_dependencies
+            )
+            has_specific_db_path = _paths_contain_any(
+                entry_paths + evidence_paths,
+                {"drizzle", "prisma", "schema"},
+            )
+            if db_dependencies:
+                score += 0.12
+            elif not has_specific_db_path:
+                score -= 0.36
+        if capability == "file-storage":
+            storage_dependencies = {
+                "@aws-sdk/client-s3",
+                "@vercel/blob",
+                "@supabase/supabase-js",
+                "firebase",
+                "googleapis",
+                "react-dropzone",
+                "uploadthing",
+            } & set(external_dependencies)
+            has_storage_path = _paths_contain_any(
+                entry_paths + evidence_paths,
+                {"attachment", "blob", "document", "drive", "r2", "s3", "storage", "upload"},
+            )
+            if storage_dependencies:
+                score += 0.14
+            if not has_storage_path:
+                score -= 0.32
         if capability in BACKEND_CAPABILITIES and not _has_backend_path(entry_paths):
             score -= 0.28
         if gemma_profile and profile_score < 0.12:
@@ -864,6 +984,7 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
             commit_sha=str(data["commit_sha"]),
             capability=capability,
             score=round(display_score, 4),
+            task_signature=signature,
             entry_paths=[str(p) for p in entry_paths],
             dependency_paths=[str(p) for p in dependency_paths],
             external_dependencies=[str(p) for p in external_dependencies],

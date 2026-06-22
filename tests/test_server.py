@@ -1,10 +1,20 @@
 import json
+from pathlib import Path
 
 import pytest
 from fastmcp.exceptions import ToolError
 
+from repo_finder import catalog, server
 from repo_finder.models import RateLimitError
 from repo_finder.server import _build_search_query, _format_error, _parse_url
+
+
+@pytest.fixture(autouse=True)
+def isolated_catalog(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPO_FINDER_HOME", str(tmp_path / ".repo_finder"))
+    catalog.reset_connection()
+    yield
+    catalog.reset_connection()
 
 
 def test_parse_url_slug():
@@ -92,3 +102,101 @@ def test_format_error_generic():
     assert parsed["error"] == "Something went wrong"
     assert parsed["recoverable"] is False
     assert parsed["retry_after"] is None
+
+
+def _create_reusable_asset(tmp_path: Path) -> str:
+    snapshot_root = tmp_path / "snapshot"
+    (snapshot_root / "components").mkdir(parents=True)
+    (snapshot_root / "components" / "data-table.tsx").write_text(
+        "export function DataTable() { return <table /> }",
+        encoding="utf-8",
+    )
+    repo_id = catalog.upsert_repository(
+        {
+            "owner": {"login": "owner"},
+            "name": "repo",
+            "full_name": "owner/repo",
+            "html_url": "https://github.com/owner/repo",
+            "private": False,
+            "archived": False,
+            "mirror_url": None,
+            "fork": False,
+            "is_template": False,
+            "language": "TypeScript",
+            "size": 10,
+            "created_at": "2026-01-15T00:00:00Z",
+            "pushed_at": "2026-06-20T12:00:00Z",
+            "topics": ["nextjs"],
+        },
+        "test",
+    )
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+    return catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "data-table",
+        {
+            "entry_paths": ["components/data-table.tsx"],
+            "dependency_paths": [],
+            "external_dependencies": ["@tanstack/react-table"],
+            "evidence_paths": ["components/data-table.tsx:1-1"],
+            "reuse_score": 1.0,
+            "synthesis": {
+                "adaptation_notes": ["Copy the component and wire columns locally."],
+                "ui_path_score": 1.0,
+                "noise_penalty": 0.0,
+                "capability_path_score": 1.0,
+            },
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_reuse_tools_carry_task_signature_and_record_outcomes(tmp_path: Path) -> None:
+    asset_id = _create_reusable_asset(tmp_path)
+
+    result = await server.find_reusable_code.fn("Find a reusable data table", max_repos=1)
+
+    assert result.task_signature == catalog.task_signature("Find a reusable data table")
+    assert result.results[0].candidate_id == asset_id
+    assert result.results[0].task_signature == result.task_signature
+    assert "get_source_bundle(candidate_id, task_signature)" in result.next_steps[0]
+
+    bundle = await server.get_source_bundle.fn(asset_id, result.task_signature)
+    manifest = json.loads(Path(bundle.manifest_path).read_text(encoding="utf-8"))
+    assert bundle.task_signature == result.task_signature
+    assert manifest["task_signature"] == result.task_signature
+
+    recorded = await server.record_reuse_outcome.fn(
+        asset_id,
+        result.task_signature,
+        "selected",
+        notes="usable",
+    )
+    assert recorded.task_signature == result.task_signature
+    assert recorded.recorded is True
+
+    rows = catalog.get_connection().execute(
+        """
+        SELECT task_signature, outcome, notes
+        FROM reuse_outcomes
+        WHERE asset_id = ?
+        ORDER BY recorded_at
+        """,
+        [asset_id],
+    ).fetchall()
+    assert (result.task_signature, "returned", None) in rows
+    assert (result.task_signature, "opened_bundle", None) in rows
+    assert (result.task_signature, "selected", "usable") in rows
+
+
+@pytest.mark.asyncio
+async def test_reuse_tools_require_task_signature(tmp_path: Path) -> None:
+    asset_id = _create_reusable_asset(tmp_path)
+
+    with pytest.raises(ToolError, match="task_signature is required"):
+        await server.get_source_bundle.fn(asset_id, "")
+
+    with pytest.raises(ToolError, match="task_signature is required"):
+        await server.record_reuse_outcome.fn(asset_id, "", "selected")

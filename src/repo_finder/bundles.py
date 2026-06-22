@@ -18,7 +18,9 @@ def _safe_source_path(root: Path, rel_path: str) -> Path:
     return source
 
 
-def create_source_bundle(candidate_id: str) -> SourceBundleResult:
+def create_source_bundle(candidate_id: str, task_signature: str) -> SourceBundleResult:
+    if not task_signature.strip():
+        raise ToolError("task_signature is required.")
     asset = catalog.get_asset_detail(candidate_id)
     if asset is None:
         raise ToolError(f"Unknown candidate_id: {candidate_id}")
@@ -44,6 +46,7 @@ def create_source_bundle(candidate_id: str) -> SourceBundleResult:
     synthesis = asset["synthesis"]
     manifest: dict[str, Any] = {
         "candidate_id": candidate_id,
+        "task_signature": task_signature,
         "repo_id": asset["repo_id"],
         "html_url": asset["html_url"],
         "commit_sha": asset["commit_sha"],
@@ -60,6 +63,7 @@ def create_source_bundle(candidate_id: str) -> SourceBundleResult:
 
     return SourceBundleResult(
         candidate_id=candidate_id,
+        task_signature=task_signature,
         repo_id=str(asset["repo_id"]),
         commit_sha=str(asset["commit_sha"]),
         bundle_path=str(bundle_root),

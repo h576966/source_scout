@@ -56,9 +56,9 @@ Default tools:
 
 | Tool | Purpose |
 |------|---------|
-| `find_reusable_code(task, project_path=None, max_repos=3)` | Return shortlisted reusable candidates with evidence paths and adaptation notes. |
-| `get_source_bundle(candidate_id)` | Copy recommended files/config into a local bundle and write a manifest. |
-| `record_reuse_outcome(candidate_id, outcome, notes=None)` | Track selected, integrated, or rejected candidates for future ranking. |
+| `find_reusable_code(task, project_path=None, max_repos=3)` | Return shortlisted reusable candidates, each with `task_signature`, evidence paths, and adaptation notes. |
+| `get_source_bundle(candidate_id, task_signature)` | Copy recommended files/config into a local bundle and write a manifest tied to the original task. |
+| `record_reuse_outcome(candidate_id, task_signature, outcome, notes=None)` | Track selected, integrated, or rejected candidates against the original task. |
 
 Legacy generic GitHub tools are hidden by default. Set
 `REPO_FINDER_ENABLE_LEGACY_TOOLS=1` only for debugging older behavior.
@@ -147,6 +147,9 @@ src/repo_finder/
 ## Constraints
 
 - First domain is Next.js / React / TypeScript UI reuse.
+- Scout/qualify only accepts fresh repositories: created within 730 days,
+  pushed within 180 days, public, not archived, not forks, not templates, not
+  mirrors, and under the local size cap.
 - Do not execute arbitrary cloned repository code.
 - Analyze exact commit SHAs, not moving branch heads.
 - Keep generated data local.
