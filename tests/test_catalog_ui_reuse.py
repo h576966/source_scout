@@ -97,6 +97,7 @@ def test_catalog_schema_and_paths() -> None:
         "assets",
         "reuse_outcomes",
         "analysis_runs",
+        "evidence_refinements",
     }.issubset(tables)
 
     path = catalog.snapshot_path("owner", "repo", "abc123")

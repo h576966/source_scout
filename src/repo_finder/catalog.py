@@ -295,6 +295,24 @@ def initialize_catalog(conn: duckdb.DuckDBPyConnection | None = None) -> None:
             created_at TEXT NOT NULL
         )
     """)
+    active.execute("""
+        CREATE TABLE IF NOT EXISTS evidence_refinements (
+            refinement_id TEXT PRIMARY KEY,
+            asset_id TEXT NOT NULL,
+            repo_id TEXT NOT NULL,
+            snapshot_id TEXT NOT NULL,
+            task_signature TEXT NOT NULL,
+            capability TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            query TEXT NOT NULL,
+            evidence_paths TEXT NOT NULL,
+            notes TEXT NOT NULL,
+            trajectory TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
 
 
 def _json_dump(value: Any) -> str:
@@ -1068,6 +1086,57 @@ def record_analysis_run(
         ],
     )
     return run_id
+
+
+def store_evidence_refinement(
+    *,
+    asset_id: str,
+    repo_id: str,
+    snapshot_id: str,
+    task_signature: str,
+    capability: str,
+    model_id: str,
+    prompt_version: str,
+    schema_version: str,
+    query: str,
+    evidence_paths: list[str],
+    notes: list[str],
+    trajectory: list[dict[str, Any]],
+) -> str:
+    refinement_id = _hash_id(
+        asset_id,
+        task_signature,
+        model_id,
+        prompt_version,
+        _now_iso(),
+    )
+    get_connection().execute(
+        """
+        INSERT INTO evidence_refinements (
+            refinement_id, asset_id, repo_id, snapshot_id, task_signature,
+            capability, model_id, prompt_version, schema_version, query,
+            evidence_paths, notes, trajectory, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            refinement_id,
+            asset_id,
+            repo_id,
+            snapshot_id,
+            task_signature,
+            capability,
+            model_id,
+            prompt_version,
+            schema_version,
+            query,
+            _json_dump(evidence_paths),
+            _json_dump(notes),
+            _json_dump(trajectory),
+            _now_iso(),
+        ],
+    )
+    return refinement_id
 
 
 def garbage_collect_snapshots(keep_per_repo: int) -> dict[str, int]:

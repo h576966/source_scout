@@ -92,6 +92,34 @@ async def chat_json(
     temperature: float = 0.1,
     attempts: int = 2,
 ) -> dict[str, Any]:
+    last_error: LMStudioError | None = None
+    for _attempt in range(max(1, attempts)):
+        try:
+            content = await chat_text(
+                model_id=model_id,
+                messages=messages,
+                config=config,
+                transport=transport,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return parse_json_content(content)
+        except LMStudioError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise LMStudioError("LM Studio chat completion failed.")
+
+
+async def chat_text(
+    model_id: str,
+    messages: list[dict[str, str]],
+    config: LMStudioConfig | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    max_tokens: int = 1600,
+    temperature: float = 0.1,
+    response_format: dict[str, Any] | None = None,
+) -> str:
     active = config or get_config()
     payload: dict[str, Any] = {
         "model": model_id,
@@ -99,24 +127,18 @@ async def chat_json(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    last_error: LMStudioError | None = None
-    for _attempt in range(max(1, attempts)):
-        try:
-            async with httpx.AsyncClient(timeout=active.timeout_seconds, transport=transport) as client:
-                response = await client.post(f"{active.base_url}/chat/completions", json=payload)
-                response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise LMStudioError(f"LM Studio chat completion failed for model '{model_id}'.") from exc
+    if response_format is not None:
+        payload["response_format"] = response_format
 
-        data = response.json()
-        try:
-            content = _extract_message_content(data)
-            return parse_json_content(content)
-        except LMStudioError as exc:
-            last_error = exc
-    if last_error is not None:
-        raise last_error
-    raise LMStudioError("LM Studio chat completion failed.")
+    try:
+        async with httpx.AsyncClient(timeout=active.timeout_seconds, transport=transport) as client:
+            response = await client.post(f"{active.base_url}/chat/completions", json=payload)
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise LMStudioError(f"LM Studio chat completion failed for model '{model_id}'.") from exc
+
+    data = response.json()
+    return _extract_message_content(data)
 
 
 def _extract_message_content(data: dict[str, Any]) -> str:

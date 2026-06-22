@@ -73,6 +73,26 @@ def main() -> None:
     lmstudio_parser.add_argument("--start-server", action="store_true")
     lmstudio_parser.add_argument("--smoke-test", action="store_true")
 
+    fastcontext_parser = subparsers.add_parser(
+        "fastcontext-status",
+        help="Check local FastContext model connectivity through LM Studio",
+    )
+    fastcontext_parser.add_argument("--start-server", action="store_true")
+    fastcontext_parser.add_argument("--smoke-test", action="store_true")
+
+    refine_parser = subparsers.add_parser(
+        "refine-evidence",
+        help="Use FastContext to refine evidence for a catalog candidate",
+    )
+    refine_parser.add_argument("--candidate-id")
+    refine_parser.add_argument("--task")
+    refine_parser.add_argument("--suite")
+    refine_parser.add_argument("--top-k", type=int, default=3)
+    refine_parser.add_argument("--label", default=None)
+    refine_parser.add_argument("--output", default=None)
+    refine_parser.add_argument("--limit-tasks", type=int, default=None)
+    refine_parser.add_argument("--max-turns", type=int, default=6)
+
     serve_parser = subparsers.add_parser("serve-mcp", help="Run the MCP server")
     serve_parser.add_argument("--transport", choices=["stdio", "http"], default=None)
     serve_parser.add_argument("--port", type=int, default=None)
@@ -143,6 +163,51 @@ def main() -> None:
         print(json.dumps(status_result, indent=2, sort_keys=True))
         return
 
+    if args.command == "fastcontext-status":
+        status_result = asyncio.run(_fastcontext_status(args.start_server, args.smoke_test))
+        print(json.dumps(status_result, indent=2, sort_keys=True))
+        return
+
+    if args.command == "refine-evidence":
+        from pathlib import Path
+
+        from . import fastcontext
+
+        if args.suite:
+            if args.candidate_id or args.task:
+                refine_parser.error("--suite cannot be combined with --candidate-id or --task.")
+            output_path = Path(args.output) if args.output else None
+            result = asyncio.run(
+                fastcontext.refine_suite(
+                    suite=args.suite,
+                    top_k=args.top_k,
+                    label=args.label,
+                    output_path=output_path,
+                    max_turns=args.max_turns,
+                    limit_tasks=args.limit_tasks,
+                )
+            )
+            summary = {
+                "suite_id": result["suite_id"],
+                "label": result["label"],
+                "metrics": result["metrics"],
+                "scoring_recommendation": result["scoring_recommendation"],
+                "report_path": result["report_path"],
+            }
+            print(json.dumps(summary, indent=2, sort_keys=True))
+            return
+        if not args.candidate_id or not args.task:
+            refine_parser.error("--candidate-id and --task are required unless --suite is used.")
+        result = asyncio.run(
+            fastcontext.refine_candidate(
+                candidate_id=args.candidate_id,
+                task=args.task,
+                max_turns=args.max_turns,
+            )
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
     if args.command == "gc":
         from .pipeline import gc
 
@@ -184,6 +249,35 @@ async def _lmstudio_status(start_server: bool, smoke_test: bool) -> dict[str, ob
                 max_tokens=100,
             )
         except lmstudio.LMStudioError as exc:
+            result["smoke_test"] = {"ok": False, "error": str(exc)}
+    return result
+
+
+async def _fastcontext_status(start_server: bool, smoke_test: bool) -> dict[str, object]:
+    from . import fastcontext, lmstudio
+
+    config = lmstudio.get_config()
+    started = False
+    try:
+        status = await lmstudio.validate_models(config)
+    except lmstudio.LMStudioError as exc:
+        if not start_server:
+            return {
+                "base_url": config.base_url,
+                "reachable": False,
+                "error": str(exc),
+                "hint": "Run repo-finder fastcontext-status --start-server",
+            }
+        lmstudio.start_server()
+        started = True
+        await asyncio.sleep(1)
+        status = await lmstudio.validate_models(config)
+
+    result: dict[str, object] = {"reachable": True, "started_server": started, **status}
+    if smoke_test:
+        try:
+            result["smoke_test"] = await fastcontext.smoke_test(config)
+        except (fastcontext.FastContextError, lmstudio.LMStudioError) as exc:
             result["smoke_test"] = {"ok": False, "error": str(exc)}
     return result
 
