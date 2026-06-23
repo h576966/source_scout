@@ -8,7 +8,8 @@ search. The system scouts candidate repositories, stores reproducible local
 snapshots by commit SHA, extracts deterministic file-level evidence, and exposes
 small source bundles to coding agents.
 
-See `docs/source-scout-direction.md` for the full design direction.
+See `docs/source-scout-direction.md` for the full design direction. See
+`docs/complexity-budget.md` for scope boundaries and model role rules.
 
 ## Prerequisites
 
@@ -244,6 +245,14 @@ Optional LM Studio MCP config:
 
 ## Local Checks
 
+For normal local development:
+
+```powershell
+source-scout check
+```
+
+This runs the lightweight safe checks:
+
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m mypy src
@@ -262,7 +271,16 @@ only when needed:
 Corpus quality check:
 
 ```powershell
+source-scout check --with-quality
 .\.venv\Scripts\python.exe scripts\run_quality_checks.py
+```
+
+`--with-quality` may call GitHub and requires `GITHUB_TOKEN`.
+`--with-local-explore-eval` runs the local FastContext eval and requires LM
+Studio/FastContext to be available:
+
+```powershell
+source-scout check --with-local-explore-eval
 ```
 
 Golden catalog evals:

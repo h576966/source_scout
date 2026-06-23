@@ -1,4 +1,4 @@
-"""GitHub Project Finder MCP server."""
+"""Source Scout package."""
 
 from .constants import SKIP_DIRS, _now_iso  # noqa: F401
 

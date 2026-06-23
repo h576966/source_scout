@@ -40,6 +40,21 @@ from .urls import parse_owner_repo
 
 mcp = FastMCP("SourceScout")
 
+DEFAULT_MCP_TOOL_NAMES = (
+    "find_reusable_code",
+    "assess_reusable_code",
+    "get_source_bundle",
+    "record_reuse_outcome",
+    "explore_local_code",
+)
+LEGACY_MCP_TOOL_NAMES = (
+    "find_repos_for_task",
+    "inspect_github_repo",
+    "compare_github_repos",
+    "extract_patterns_from_repo",
+    "deep_inspect_repo",
+)
+
 
 def _parse_url(url_or_slug: str) -> tuple[str, str]:
     parsed = parse_owner_repo(url_or_slug)
@@ -92,6 +107,9 @@ def _legacy_tools_enabled() -> bool:
     return os.environ.get("SOURCE_SCOUT_ENABLE_LEGACY_TOOLS") == "1"
 
 
+# Legacy/debug-only generic GitHub tools. They are defined here so
+# SOURCE_SCOUT_ENABLE_LEGACY_TOOLS can expose them, but removed from the default
+# MCP surface at module import.
 @mcp.tool(
     annotations={"readOnlyHint": True},
 )
@@ -543,11 +561,5 @@ async def record_reuse_outcome(
 
 
 if not _legacy_tools_enabled():
-    for _tool_name in (
-        "find_repos_for_task",
-        "inspect_github_repo",
-        "compare_github_repos",
-        "extract_patterns_from_repo",
-        "deep_inspect_repo",
-    ):
+    for _tool_name in LEGACY_MCP_TOOL_NAMES:
         mcp.remove_tool(_tool_name)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from source_scout import bundles, catalog, evidence, pipeline
+from source_scout import bundles, capabilities, catalog, evidence, pipeline
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +80,17 @@ def _profile(capability_name: str, evidence_paths: list[str], confidence: float 
         "needs_fastcontext": True,
         "concerns": [],
     }
+
+
+def test_capability_constants_cover_catalog_scoring_representatives() -> None:
+    assert {"data-table", "command-palette"} <= capabilities.UI_CAPABILITIES
+    assert {"route-handlers", "data-access", "background-jobs"} <= capabilities.BACKEND_CAPABILITIES
+    assert "tanstack" in capabilities.CAPABILITY_INTENT_HINTS["data-table"]
+    assert "api route" in capabilities.CAPABILITY_INTENT_HINTS["route-handlers"]
+    assert {"api", "route"} <= capabilities.BACKEND_CAPABILITY_PATH_TERMS["route-handlers"]
+    assert {"db", "prisma"} <= capabilities.BACKEND_CAPABILITY_PATH_TERMS["data-access"]
+    assert {"cron", "worker"} <= capabilities.BACKGROUND_JOB_STRONG_TERMS
+    assert "service-worker" in capabilities.BACKGROUND_JOB_FALSE_POSITIVE_TERMS
 
 
 def test_catalog_schema_and_paths() -> None:
@@ -683,8 +694,8 @@ async def test_legacy_tools_hidden_by_default(monkeypatch) -> None:
 
     reloaded = importlib.reload(server)
     names = await _tool_names(reloaded)
-    assert {"find_reusable_code", "get_source_bundle", "record_reuse_outcome"}.issubset(names)
-    assert "find_repos_for_task" not in names
+    assert names == set(reloaded.DEFAULT_MCP_TOOL_NAMES)
+    assert not (set(reloaded.LEGACY_MCP_TOOL_NAMES) & names)
 
 
 @pytest.mark.asyncio
@@ -694,8 +705,8 @@ async def test_legacy_tools_enabled_by_env(monkeypatch) -> None:
 
     reloaded = importlib.reload(server)
     names = await _tool_names(reloaded)
-    assert "find_repos_for_task" in names
-    assert "find_reusable_code" in names
+    assert set(reloaded.DEFAULT_MCP_TOOL_NAMES).issubset(names)
+    assert set(reloaded.LEGACY_MCP_TOOL_NAMES).issubset(names)
 
     monkeypatch.delenv("SOURCE_SCOUT_ENABLE_LEGACY_TOOLS", raising=False)
     importlib.reload(server)

@@ -1,1 +1,1 @@
-"""Tests for GitHub Project Finder MCP server."""
+"""Tests for Source Scout."""

@@ -1,4 +1,4 @@
-# Requirements: GitHub Project Finder MCP
+# Requirements: Source Scout
 
 > Historical MVP requirements. The active product direction is the catalog-first
 > Next.js/React UI reuse layer described in `docs/source-scout-direction.md`.

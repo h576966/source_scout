@@ -1,4 +1,4 @@
-# Architecture: GitHub Project Finder MCP
+# Architecture: Source Scout
 
 > Historical MVP architecture. The active architecture direction is the
 > catalog-first reuse layer described in `docs/source-scout-direction.md`.

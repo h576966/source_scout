@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 import sys
 from dataclasses import asdict
 
@@ -26,6 +27,41 @@ def _run_mcp(transport: str, port: int) -> None:
         mcp.run()
 
 
+def _check_commands(with_quality: bool, with_local_explore_eval: bool) -> list[list[str]]:
+    commands = [
+        [sys.executable, "-m", "ruff", "check", "."],
+        [sys.executable, "-m", "mypy", "src"],
+        [sys.executable, "-m", "pytest", "-q"],
+    ]
+    if with_quality:
+        commands.append([sys.executable, "scripts/run_quality_checks.py"])
+    if with_local_explore_eval:
+        commands.append(
+            [
+                sys.executable,
+                "-m",
+                "source_scout",
+                "eval-local-explore",
+                "--suite",
+                "source-scout",
+                "--max-turns",
+                "6",
+                "--label",
+                "check-local-explore",
+            ]
+        )
+    return commands
+
+
+def _run_check_commands(with_quality: bool, with_local_explore_eval: bool) -> None:
+    for command in _check_commands(with_quality, with_local_explore_eval):
+        print(f"\n==> {subprocess.list2cmdline(command)}", flush=True)
+        completed = subprocess.run(command, check=False)
+        if completed.returncode != 0:
+            sys.exit(completed.returncode)
+    print("\nAll checks passed.", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -45,6 +81,10 @@ def main() -> None:
         help="Port for HTTP transport (default: 8000)",
     )
     subparsers = parser.add_subparsers(dest="command")
+
+    check_parser = subparsers.add_parser("check", help="Run local development checks")
+    check_parser.add_argument("--with-quality", action="store_true")
+    check_parser.add_argument("--with-local-explore-eval", action="store_true")
 
     scout_parser = subparsers.add_parser("scout", help="Discover raw Next.js UI candidate repositories")
     scout_parser.add_argument("--domain", default="nextjs-ui", choices=["nextjs-ui"])
@@ -159,6 +199,10 @@ def main() -> None:
             transport = args.transport or parser.get_default("transport")
             port = args.port or parser.get_default("port")
         _run_mcp(str(transport), int(port))
+        return
+
+    if args.command == "check":
+        _run_check_commands(args.with_quality, args.with_local_explore_eval)
         return
 
     if args.command == "scout":

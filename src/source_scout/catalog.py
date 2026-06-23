@@ -9,6 +9,16 @@ from typing import Any
 
 import duckdb
 
+from .capabilities import (
+    BACKEND_CAPABILITIES,
+    BACKEND_CAPABILITY_PATH_TERMS,
+    BACKEND_PATH_PARTS,
+    BACKGROUND_JOB_FALSE_POSITIVE_TERMS,
+    BACKGROUND_JOB_STRONG_TERMS,
+    CAPABILITY_INTENT_HINTS,
+    COMMAND_PALETTE_DEPENDENCIES,
+    UI_CAPABILITIES,
+)
 from .constants import MAX_REPO_AGE_DAYS, MAX_REPOSITORY_SIZE_KB, MAX_STALE_DAYS, _now_iso
 from .models import (
     AdaptationStep,
@@ -23,123 +33,6 @@ from .models import (
 
 ANALYZER_VERSION = "deterministic-ui-v1"
 DEFAULT_DB_NAME = "cache.duckdb"
-UI_CAPABILITIES = {
-    "data-table",
-    "command-palette",
-    "auth-ui",
-    "settings",
-    "dashboard",
-    "forms",
-    "file-upload",
-    "charts",
-    "navigation",
-    "admin-interface",
-}
-BACKEND_CAPABILITIES = {
-    "route-handlers",
-    "server-actions",
-    "auth-middleware",
-    "trpc-router",
-    "data-access",
-    "file-storage",
-    "email-webhooks",
-    "background-jobs",
-    "validation-schemas",
-    "admin-export",
-}
-COMMAND_PALETTE_DEPENDENCIES = {
-    "@ariakit/react",
-    "@base-ui/react",
-    "cmdk",
-    "react-aria-components",
-}
-BACKEND_PATH_PARTS = {
-    "actions",
-    "api",
-    "auth",
-    "cron",
-    "db",
-    "drizzle",
-    "inngest",
-    "job",
-    "jobs",
-    "middleware",
-    "prisma",
-    "queue",
-    "route",
-    "routes",
-    "routers",
-    "server",
-    "services",
-    "sync",
-    "worker",
-    "workers",
-}
-BACKEND_CAPABILITY_PATH_TERMS = {
-    "route-handlers": {"api", "route", "routes", "router", "routers"},
-    "server-actions": {"action", "actions", "server"},
-    "auth-middleware": {"auth", "middleware", "session", "sessions", "login"},
-    "trpc-router": {"trpc", "router", "routers"},
-    "data-access": {"db", "database", "drizzle", "prisma", "schema", "schemas"},
-    "file-storage": {
-        "attachment",
-        "attachments",
-        "blob",
-        "document",
-        "documents",
-        "drive",
-        "media",
-        "r2",
-        "s3",
-        "storage",
-        "upload",
-        "uploads",
-    },
-    "email-webhooks": {"email", "webhook", "webhooks", "message", "handler"},
-    "background-jobs": {"cron", "inngest", "job", "jobs", "processor", "queue", "sync", "worker"},
-    "validation-schemas": {"schema", "schemas", "validation", "zod", "resolver"},
-    "admin-export": {"export", "pdf", "report", "reports", "xlsx", "excel"},
-}
-BACKGROUND_JOB_STRONG_TERMS = {
-    "cron",
-    "inngest",
-    "job",
-    "jobs",
-    "processor",
-    "queue",
-    "sync",
-    "worker",
-    "workers",
-}
-BACKGROUND_JOB_FALSE_POSITIVE_TERMS = {
-    "service-worker",
-    "serviceworker",
-    "sw.js",
-    "pwa",
-}
-CAPABILITY_INTENT_HINTS = {
-    "data-table": {"data table", "datatable", "tanstack", "table", "columns"},
-    "command-palette": {"command palette", "cmdk", "quick navigation", "command"},
-    "auth-ui": {"auth", "login", "sign in", "signin", "signup", "password"},
-    "settings": {"settings", "profile", "security", "account", "preferences"},
-    "dashboard": {"dashboard", "overview", "kpi", "analytics"},
-    "forms": {"form", "forms", "multi step", "multi-step", "validation"},
-    "file-upload": {"file upload", "upload", "import", "dropzone"},
-    "charts": {"chart", "charts", "recharts", "analytics", "graph"},
-    "navigation": {"navigation", "sidebar", "navbar", "layout"},
-    "admin-interface": {"admin crud", "crud", "detail pages", "admin interface"},
-    "route-handlers": {"route handler", "route handlers", "api route", "api routes", "endpoints"},
-    "server-actions": {"server action", "server actions", "actions", "admin workflows"},
-    "auth-middleware": {"auth middleware", "sessions", "session", "auth helpers", "server-side auth"},
-    "trpc-router": {"trpc", "typed api", "router", "routers"},
-    "data-access": {"drizzle", "prisma", "data access", "database", "schema"},
-    "file-storage": {"file upload", "storage", "drive", "blob", "object storage"},
-    "email-webhooks": {"email", "webhook", "webhooks", "message processing", "handlers"},
-    "background-jobs": {"background job", "background jobs", "worker", "sync", "scheduled"},
-    "validation-schemas": {"validation schema", "validation schemas", "zod", "api inputs"},
-    "admin-export": {"admin export", "data export", "reporting", "pdf", "excel", "reports"},
-}
-
 ALLOWED_REUSE_OUTCOMES = {
     "returned",
     "opened_bundle",
