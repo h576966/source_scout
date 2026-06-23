@@ -8,7 +8,7 @@ search. The system scouts candidate repositories, stores reproducible local
 snapshots by commit SHA, extracts deterministic file-level evidence, and exposes
 small source bundles to coding agents.
 
-See `docs/source-scout-direction.md` for the full design direction. See
+See `docs/source-scout-direction.md` for the current product direction and
 `docs/complexity-budget.md` for scope boundaries and model role rules.
 
 ## Prerequisites
