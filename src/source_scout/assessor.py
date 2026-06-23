@@ -23,6 +23,60 @@ from .models import (
 PROMPT_VERSION = "gemma-reuse-assessor-v1"
 SCHEMA_VERSION = "reuse-assessment-v1"
 ANALYZER_VERSION = "gemma-reuse-assessor-v1"
+ASSESSMENT_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "reuse_assessment",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "recommended_verdict": {
+                    "type": "string",
+                    "enum": ["select", "inspect", "reject", "insufficient_evidence"],
+                },
+                "model_confidence": {"type": "number"},
+                "dimension_scores": {
+                    "type": "object",
+                    "properties": {
+                        "functional_fit": {"type": "number"},
+                        "extractability": {"type": "number"},
+                        "dependency_fit": {"type": "number"},
+                        "coupling_risk": {"type": "number"},
+                        "maintenance_risk": {"type": "number"},
+                    },
+                    "required": [
+                        "functional_fit",
+                        "extractability",
+                        "dependency_fit",
+                        "coupling_risk",
+                        "maintenance_risk",
+                    ],
+                    "additionalProperties": True,
+                },
+                "requirement_assessments": {"type": "array"},
+                "fit_reasons": {"type": "array"},
+                "adaptation_plan": {"type": "array"},
+                "coupling_risks": {"type": "array"},
+                "blockers": {"type": "array"},
+                "missing_evidence": {"type": "array"},
+                "needs_fastcontext": {"type": "boolean"},
+            },
+            "required": [
+                "recommended_verdict",
+                "model_confidence",
+                "dimension_scores",
+                "requirement_assessments",
+                "fit_reasons",
+                "adaptation_plan",
+                "coupling_risks",
+                "blockers",
+                "missing_evidence",
+                "needs_fastcontext",
+            ],
+            "additionalProperties": True,
+        },
+    },
+}
 
 ALLOWED_MODEL_VERDICTS = {
     assessment_rules.VERDICT_SELECT,
@@ -195,6 +249,7 @@ async def _assess_context(
             max_tokens=4000,
             temperature=0.0,
             attempts=1,
+            response_format=ASSESSMENT_RESPONSE_FORMAT,
         )
         normalized = _normalize_response(raw_response, context["evidence_id_map"])
     except lmstudio.LMStudioError:
@@ -210,6 +265,7 @@ async def _assess_context(
                 max_tokens=4000,
                 temperature=0.0,
                 attempts=1,
+                response_format=ASSESSMENT_RESPONSE_FORMAT,
             )
             normalized = _normalize_response(repair_response, context["evidence_id_map"])
             return _persist_assessment(
@@ -668,7 +724,9 @@ def _normalize_response(
     evidence_id_map: Mapping[str, str],
 ) -> dict[str, Any]:
     errors: list[str] = []
-    verdict = _string(response.get("recommended_verdict"))
+    verdict = _string(
+        response.get("recommended_verdict", response.get("recommendation_verdict"))
+    )
     if verdict not in ALLOWED_MODEL_VERDICTS:
         errors.append(f"Invalid recommended_verdict: {verdict}")
 
@@ -887,6 +945,11 @@ def _persist_assessment(
         *validation_notes,
         *_fastcontext_event_notes(context["fastcontext_events"]),
         f"model_recommended_verdict: {normalized['model_recommended_verdict']}",
+        *_deterministic_verdict_notes(
+            model_verdict=str(normalized["model_recommended_verdict"]),
+            final_verdict=score.final_verdict,
+            license_status=str(context["license_status"]),
+        ),
     ]
     if normalized["needs_fastcontext"]:
         notes.append(
@@ -926,6 +989,24 @@ def _persist_assessment(
         validation_notes=notes,
     )
     return _store_and_record(context, assessment, status=status)
+
+
+def _deterministic_verdict_notes(
+    *,
+    model_verdict: str,
+    final_verdict: str,
+    license_status: str,
+) -> list[str]:
+    if model_verdict != assessment_rules.VERDICT_SELECT:
+        return []
+    if final_verdict == assessment_rules.VERDICT_SELECT:
+        return []
+    if license_status != assessment_rules.LICENSE_PERMISSIVE_DETECTED:
+        return [
+            "final_verdict downgraded from select because license_status="
+            f"{license_status} is not permissive_detected."
+        ]
+    return [f"final_verdict changed from select to {final_verdict} by deterministic gates."]
 
 
 def _persist_safe_assessment(

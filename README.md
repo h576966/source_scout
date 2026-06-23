@@ -25,6 +25,7 @@ $env:GITHUB_TOKEN = "ghp_your_token_here"
 $env:LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1"
 $env:SOURCE_SCOUT_GEMMA_MODEL = "google/gemma-4-12b-qat"
 $env:SOURCE_SCOUT_FASTCONTEXT_MODEL = "fastcontext-1.0-4b-rl"
+$env:SOURCE_SCOUT_LMSTUDIO_TIMEOUT = "120"
 ```
 
 ## Catalog Workflow
@@ -73,7 +74,22 @@ Policy modes:
 
 Assessment evidence is commit-pinned and stored as a validated ledger with
 content hashes. Final verdicts are conservative: non-permissive, missing, or
-unknown licenses prevent `select` even when the implementation looks useful.
+unknown licenses prevent `select` even when the implementation looks useful. In
+that case Gemma may return `recommended_verdict=select`, while Source Scout
+returns `final_verdict=inspect` and records a validation note explaining the
+license gate. GitHub `NOASSERTION`, `UNKNOWN`, and `LicenseRef-*` SPDX values are
+treated as unknown.
+
+Assessment calibration uses a mocked golden suite so assessor behavior can be
+checked without live model variability:
+
+```powershell
+source-scout eval-assess --suite assessment-smoke --label local-v1
+```
+
+The report tracks verdict match rate, cache hits, repair counts, FastContext
+attempt/completion/error counts, average reuse score, evidence coverage, and
+license-gated `select` downgrades.
 
 ## Standalone Local Exploration
 
@@ -151,6 +167,7 @@ lms server status
 lms server start
 Invoke-RestMethod http://127.0.0.1:1234/v1/models
 source-scout lmstudio-status --smoke-test
+source-scout lmstudio-status --load-gemma --smoke-test
 source-scout fastcontext-status --load-model --smoke-test
 ```
 
@@ -164,6 +181,22 @@ FastContext: fastcontext-1.0-4b-rl
 `source-scout profile` uses Gemma to store JSON profiles on repository cards.
 FastContext supports read-only local exploration and evidence refinement through
 the local LM Studio server.
+
+### Recommended LM Studio Gemma preset
+
+Use Source Scout's Gemma load helper before `profile` or `assess`:
+
+```powershell
+source-scout lmstudio-status --load-gemma --gemma-context-length 32768 --gemma-gpu max --smoke-test
+```
+
+This runs `lms load google/gemma-4-12b-qat --context-length 32768 --gpu max
+--identifier google/gemma-4-12b-qat` when Gemma is missing or loaded with a
+smaller context. The 32k context leaves headroom for task-specific assessment
+prompts that include repository metadata, the evidence ledger, Gemma profile
+data, and JSON completion. Source Scout's default LM Studio timeout is `120`
+seconds because local Gemma/FastContext calls can exceed 30 seconds on real
+assessment prompts.
 
 ### Recommended LM Studio FastContext preset
 
@@ -231,6 +264,7 @@ Golden catalog evals:
 source-scout eval --suite ui-reuse --top-k 5 --label local-ui-check
 source-scout eval --suite nextjs-backend --top-k 5 --label local-backend-check
 source-scout eval-local-explore --suite source-scout --max-turns 6 --label local-fastcontext-check
+source-scout eval-assess --suite assessment-smoke --label local-assessment-check
 ```
 
 Eval reports are written to `.source_scout/eval_runs/<suite_id>/`. They measure

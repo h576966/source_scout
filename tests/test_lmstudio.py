@@ -27,7 +27,7 @@ def test_lmstudio_config_defaults(monkeypatch) -> None:
     assert config.base_url == "http://127.0.0.1:1234/v1"
     assert config.gemma_model == "google/gemma-4-12b-qat"
     assert config.fastcontext_model == "fastcontext-1.0-4b-rl"
-    assert config.timeout_seconds == 30.0
+    assert config.timeout_seconds == 120.0
 
 
 def test_lmstudio_config_env_overrides(monkeypatch) -> None:
@@ -179,6 +179,53 @@ def test_load_fastcontext_model_uses_expected_lms_flags(monkeypatch) -> None:
     assert result["gpu"] == "max"
 
 
+def test_load_gemma_model_uses_expected_context_and_reloads_existing_model(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> object:
+        calls.append(command)
+        assert kwargs["check"] is True
+        if command[1:] == ["ls", "--json"]:
+            stdout = json.dumps([{"modelKey": lmstudio.DEFAULT_GEMMA_MODEL}])
+        elif command[1:] == ["ps", "--json"]:
+            stdout = json.dumps(
+                [
+                    {
+                        "modelKey": lmstudio.DEFAULT_GEMMA_MODEL,
+                        "identifier": lmstudio.DEFAULT_GEMMA_MODEL,
+                        "contextLength": 8192,
+                    }
+                ]
+            )
+        else:
+            stdout = "ok"
+        return type("Completed", (), {"stdout": stdout, "stderr": ""})()
+
+    monkeypatch.setattr(lmstudio.subprocess, "run", fake_run)
+
+    result = lmstudio.load_gemma_model()
+
+    assert calls == [
+        [lmstudio.LMS_EXE, "ls", "--json"],
+        [lmstudio.LMS_EXE, "ps", "--json"],
+        [lmstudio.LMS_EXE, "unload", lmstudio.DEFAULT_GEMMA_MODEL],
+        [
+            lmstudio.LMS_EXE,
+            "load",
+            lmstudio.DEFAULT_GEMMA_MODEL,
+            "--context-length",
+            "32768",
+            "--gpu",
+            "max",
+            "--identifier",
+            lmstudio.DEFAULT_GEMMA_MODEL,
+        ],
+    ]
+    assert result["model_id"] == lmstudio.DEFAULT_GEMMA_MODEL
+    assert result["context_length"] == 32768
+    assert result["gpu"] == "max"
+
+
 @pytest.mark.asyncio
 async def test_chat_json_posts_chat_completion_and_parses_json() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -199,6 +246,25 @@ async def test_chat_json_posts_chat_completion_and_parses_json() -> None:
         "gemma",
         [{"role": "user", "content": "return json"}],
         transport=transport,
+    )
+    assert result == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_chat_json_passes_response_format() -> None:
+    response_format = {"type": "json_schema", "json_schema": {"name": "x", "schema": {"type": "object"}}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["response_format"] == response_format
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": true}'}}]})
+
+    transport = httpx.MockTransport(handler)
+    result = await lmstudio.chat_json(
+        "gemma",
+        [{"role": "user", "content": "return json"}],
+        transport=transport,
+        response_format=response_format,
     )
     assert result == {"ok": True}
 
@@ -385,13 +451,33 @@ async def test_profile_repository_cards_stores_gemma_profile(tmp_path, monkeypat
 def test_lmstudio_status_cli_prints_json(monkeypatch, capsys) -> None:
     import source_scout.__main__ as main_module
 
-    async def fake_status(start_server: bool, smoke_test: bool) -> dict[str, object]:
+    async def fake_status(
+        start_server: bool,
+        smoke_test: bool,
+        *,
+        load_gemma: bool,
+        gemma_context_length: int,
+        gemma_gpu: str,
+    ) -> dict[str, object]:
         assert start_server is True
         assert smoke_test is True
+        assert load_gemma is True
+        assert gemma_context_length == 32768
+        assert gemma_gpu == "max"
         return {"reachable": True}
 
     monkeypatch.setattr(main_module, "_lmstudio_status", fake_status)
-    monkeypatch.setattr(sys, "argv", ["source-scout", "lmstudio-status", "--start-server", "--smoke-test"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "source-scout",
+            "lmstudio-status",
+            "--start-server",
+            "--smoke-test",
+            "--load-gemma",
+        ],
+    )
     main_module.main()
     captured = capsys.readouterr()
     assert '"reachable": true' in captured.out
@@ -443,6 +529,81 @@ async def test_lmstudio_status_reports_api_downloaded_and_loaded(monkeypatch) ->
     assert configured["fastcontext"]["downloaded"] is True
     assert configured["fastcontext"]["loaded"] is True
     assert configured["fastcontext"]["api_listed"] is False
+
+
+@pytest.mark.asyncio
+async def test_lmstudio_status_loads_gemma_when_context_is_too_small(monkeypatch) -> None:
+    import source_scout.__main__ as main_module
+
+    validate_calls = 0
+    load_calls: list[tuple[int, str]] = []
+
+    async def fake_validate_models(config: lmstudio.LMStudioConfig) -> dict[str, object]:
+        nonlocal validate_calls
+        validate_calls += 1
+        return {
+            "base_url": config.base_url,
+            "models": [config.gemma_model],
+            "gemma_model": config.gemma_model,
+            "fastcontext_model": config.fastcontext_model,
+            "gemma_available": True,
+            "fastcontext_available": False,
+        }
+
+    def fake_model_inventory(config: lmstudio.LMStudioConfig) -> dict[str, object]:
+        loaded_detail = {"contextLength": 8192 if not load_calls else 32768}
+        return {
+            "downloaded_models": [config.gemma_model],
+            "loaded_models": [config.gemma_model],
+            "configured_models": {
+                "gemma": {
+                    "model_id": config.gemma_model,
+                    "downloaded": True,
+                    "loaded": True,
+                    "loaded_detail": loaded_detail,
+                },
+                "fastcontext": {
+                    "model_id": config.fastcontext_model,
+                    "downloaded": False,
+                    "loaded": False,
+                    "loaded_detail": None,
+                },
+            },
+        }
+
+    def fake_load_gemma_model(
+        config: lmstudio.LMStudioConfig,
+        *,
+        context_length: int,
+        gpu: str,
+    ) -> dict[str, object]:
+        load_calls.append((context_length, gpu))
+        return {
+            "model_id": config.gemma_model,
+            "context_length": context_length,
+            "gpu": gpu,
+        }
+
+    monkeypatch.setattr(lmstudio, "validate_models", fake_validate_models)
+    monkeypatch.setattr(lmstudio, "model_inventory", fake_model_inventory)
+    monkeypatch.setattr(lmstudio, "load_gemma_model", fake_load_gemma_model)
+
+    result = await main_module._lmstudio_status(
+        start_server=False,
+        smoke_test=False,
+        load_gemma=True,
+        gemma_context_length=32768,
+        gemma_gpu="max",
+    )
+
+    assert validate_calls == 2
+    assert load_calls == [(32768, "max")]
+    assert result["load_gemma"] == {
+        "model_id": lmstudio.DEFAULT_GEMMA_MODEL,
+        "context_length": 32768,
+        "gpu": "max",
+    }
+    assert result["configured_models"]["gemma"]["loaded_detail"]["contextLength"] == 32768
 
 
 @pytest.mark.asyncio

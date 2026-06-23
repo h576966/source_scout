@@ -184,6 +184,7 @@ async def test_assess_candidate_normalizes_valid_response_and_records_analysis(
     evidence_id = _first_evidence_id(candidate_id, task)
 
     async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert kwargs["response_format"] == assessor.ASSESSMENT_RESPONSE_FORMAT
         return _valid_response(evidence_id)
 
     monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
@@ -204,6 +205,28 @@ async def test_assess_candidate_normalizes_valid_response_and_records_analysis(
         "SELECT stage_name, status, model_id FROM analysis_runs WHERE stage_name = 'reuse-assess'"
     ).fetchall()
     assert runs == [("reuse-assess", "completed", lmstudio.DEFAULT_GEMMA_MODEL)]
+
+
+@pytest.mark.asyncio
+async def test_assess_candidate_accepts_recommendation_verdict_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = "Assess reusable route handler"
+    candidate_id = _candidate(tmp_path)
+    evidence_id = _first_evidence_id(candidate_id, task)
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        response = _valid_response(evidence_id)
+        response["recommendation_verdict"] = response.pop("recommended_verdict")
+        return response
+
+    monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
+
+    result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
+
+    assert result.final_verdict == assessment_rules.VERDICT_SELECT
+    assert result.recommended_verdict == assessment_rules.VERDICT_SELECT
 
 
 @pytest.mark.asyncio
@@ -343,7 +366,8 @@ async def test_assess_candidate_score_and_verdict_are_not_controlled_by_gemma(
 
     result = await assessor.assess_candidate(candidate_id, task, fastcontext_policy="never")
 
-    assert result.validation_notes[-1] == "model_recommended_verdict: select"
+    assert "model_recommended_verdict: select" in result.validation_notes
+    assert "final_verdict changed from select to reject by deterministic gates." in result.validation_notes
     assert result.recommended_verdict == assessment_rules.VERDICT_SELECT
     assert result.final_verdict == assessment_rules.VERDICT_REJECT
 
@@ -391,6 +415,10 @@ async def test_assess_candidate_license_gate_prevents_select(
     assert result.license_status == assessment_rules.LICENSE_MISSING
     assert result.recommended_verdict == assessment_rules.VERDICT_SELECT
     assert result.final_verdict == assessment_rules.VERDICT_INSPECT
+    assert (
+        "final_verdict downgraded from select because license_status=missing "
+        "is not permissive_detected."
+    ) in result.validation_notes
 
 
 @pytest.mark.asyncio

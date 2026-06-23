@@ -73,6 +73,15 @@ def main() -> None:
     local_eval_parser.add_argument("--output", default=None)
     local_eval_parser.add_argument("--limit-tasks", type=int, default=None)
 
+    assess_eval_parser = subparsers.add_parser(
+        "eval-assess",
+        help="Run a mocked golden eval suite for task-specific reuse assessment",
+    )
+    assess_eval_parser.add_argument("--suite", default="assessment-smoke")
+    assess_eval_parser.add_argument("--label", default=None)
+    assess_eval_parser.add_argument("--output", default=None)
+    assess_eval_parser.add_argument("--deterministic-only", action="store_true")
+
     profile_parser = subparsers.add_parser(
         "profile",
         help="Profile repository cards with Gemma via LM Studio",
@@ -97,6 +106,9 @@ def main() -> None:
     lmstudio_parser = subparsers.add_parser("lmstudio-status", help="Check local LM Studio connectivity")
     lmstudio_parser.add_argument("--start-server", action="store_true")
     lmstudio_parser.add_argument("--smoke-test", action="store_true")
+    lmstudio_parser.add_argument("--load-gemma", action="store_true")
+    lmstudio_parser.add_argument("--gemma-context-length", type=int, default=32_768)
+    lmstudio_parser.add_argument("--gemma-gpu", default="max")
 
     fastcontext_parser = subparsers.add_parser(
         "fastcontext-status",
@@ -214,6 +226,31 @@ def main() -> None:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
 
+    if args.command == "eval-assess":
+        from pathlib import Path
+
+        from .assessment_eval import run_assessment_eval
+
+        output_path = Path(args.output) if args.output else None
+        result = asyncio.run(
+            run_assessment_eval(
+                suite=args.suite,
+                label=args.label,
+                output_path=output_path,
+                deterministic_only=args.deterministic_only,
+            )
+        )
+        summary = {
+            "suite_id": result["suite_id"],
+            "label": result["label"],
+            "passed": result["passed"],
+            "metrics": result["metrics"],
+            "failure_examples": result["failure_examples"],
+            "report_path": result["report_path"],
+        }
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return
+
     if args.command == "profile":
         from .profiler import profile_repository_cards
 
@@ -244,7 +281,15 @@ def main() -> None:
         return
 
     if args.command == "lmstudio-status":
-        status_result = asyncio.run(_lmstudio_status(args.start_server, args.smoke_test))
+        status_result = asyncio.run(
+            _lmstudio_status(
+                args.start_server,
+                args.smoke_test,
+                load_gemma=args.load_gemma,
+                gemma_context_length=args.gemma_context_length,
+                gemma_gpu=args.gemma_gpu,
+            )
+        )
         print(json.dumps(status_result, indent=2, sort_keys=True))
         return
 
@@ -326,7 +371,13 @@ def main() -> None:
         return
 
 
-async def _lmstudio_status(start_server: bool, smoke_test: bool) -> dict[str, object]:
+async def _lmstudio_status(
+    start_server: bool,
+    smoke_test: bool,
+    load_gemma: bool = False,
+    gemma_context_length: int = 32_768,
+    gemma_gpu: str = "max",
+) -> dict[str, object]:
     from . import lmstudio
 
     config = lmstudio.get_config()
@@ -356,11 +407,36 @@ async def _lmstudio_status(start_server: bool, smoke_test: bool) -> dict[str, ob
         await asyncio.sleep(1)
         status = await lmstudio.validate_models(config)
 
+    load_result: dict[str, object] | None = None
+    inventory_status = _status_with_inventory(status, config)
+    gemma_state = _configured_model_state(inventory_status, "gemma")
+    if load_gemma and _should_load_model(gemma_state, gemma_context_length):
+        try:
+            load_result = lmstudio.load_gemma_model(
+                config,
+                context_length=gemma_context_length,
+                gpu=gemma_gpu,
+            )
+            await asyncio.sleep(1)
+            status = await lmstudio.validate_models(config)
+            inventory_status = _status_with_inventory(status, config)
+        except lmstudio.LMStudioError as exc:
+            load_result = {
+                "model_id": config.gemma_model,
+                "context_length": gemma_context_length,
+                "gpu": gemma_gpu,
+                "loaded": False,
+                "error": str(exc),
+            }
+
     result: dict[str, object] = {
         "reachable": True,
         "started_server": started,
-        **_status_with_inventory(status, config),
+        "load_gemma_requested": load_gemma,
+        **inventory_status,
     }
+    if load_result is not None:
+        result["load_gemma"] = load_result
     if smoke_test:
         try:
             smoke_result = await lmstudio.chat_json(
@@ -538,6 +614,19 @@ def _configured_model_state(status: dict[str, object], key: str) -> dict[str, ob
         return {}
     state = configured.get(key)
     return state if isinstance(state, dict) else {}
+
+
+def _should_load_model(state: dict[str, object], desired_context_length: int) -> bool:
+    if not bool(state.get("loaded")):
+        return True
+    detail = state.get("loaded_detail")
+    if not isinstance(detail, dict):
+        return True
+    try:
+        current_context = int(detail.get("contextLength", 0))
+    except (TypeError, ValueError):
+        return True
+    return current_context < desired_context_length
 
 
 if __name__ == "__main__":
