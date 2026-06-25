@@ -116,6 +116,98 @@ async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_fastcontext_tool_loop_nudges_no_tool_turn_to_priority_path(tmp_path: Path) -> None:
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    _write_snapshot(root)
+    chat_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal chat_calls
+        chat_calls += 1
+        payload = json.loads(request.content)
+        if chat_calls == 1:
+            assert "tools" in payload
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "The answer is probably in the data table."}}]},
+            )
+        if chat_calls == 2:
+            assert "tools" in payload
+            assert "You did not call a tool" in payload["messages"][-1]["content"]
+            assert "src/components/data-table.tsx" in payload["messages"][-1]["content"]
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-read-priority",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "Read",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "path": "src/components/data-table.tsx",
+                                                    "offset": 1,
+                                                    "limit": 1,
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+
+        assert "tools" not in payload
+        assert "C1: src/components/data-table.tsx:1-1" in payload["messages"][-1]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "final_answer": {
+                                        "citation_ids": ["C1"],
+                                        "notes": ["Read after priority-path nudge."],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await fastcontext._run_tool_loop(
+        root=root,
+        messages=[{"role": "user", "content": "Find the data table"}],
+        model_id=lmstudio.DEFAULT_FASTCONTEXT_MODEL,
+        config=lmstudio.get_config(),
+        max_turns=3,
+        transport=httpx.MockTransport(handler),
+        priority_paths=["src/components/data-table.tsx"],
+    )
+
+    assert result.status == "completed"
+    assert result.evidence_paths == ["src/components/data-table.tsx:1-1"]
+    assert result.notes == ["Read after priority-path nudge."]
+    assert result.trajectory[0]["validation_notes"] == [
+        "Model did not call a tool; nudging it to inspect generated priority paths."
+    ]
+    assert result.trajectory[1]["tool_calls"][0]["tool"] == "Read"
+
+
+@pytest.mark.asyncio
 async def test_fastcontext_tool_loop_falls_back_when_lmstudio_rejects_tools(tmp_path: Path) -> None:
     root = tmp_path / "snapshot"
     root.mkdir()

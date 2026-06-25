@@ -17,6 +17,12 @@ from .fastcontext_tools import (
     grep_paths,
 )
 from .fastcontext_types import FastContextError
+from .repo_map import (
+    build_repo_map,
+    repo_map_relevant_paths,
+    repo_map_seed_items,
+    repo_map_seed_text,
+)
 
 
 def _local_seed_context(root: Path, task: str) -> dict[str, Any]:
@@ -27,12 +33,22 @@ def _local_seed_context(root: Path, task: str) -> dict[str, Any]:
         matches = grep_paths(root, pattern, limit=LOCAL_CONTEXT_GREP_LIMIT)["matches"]
     terms = _task_terms(task)
     routing = _task_family_routing(terms)
-    likely_source_files = _likely_source_files(root, terms, matches, routing=routing)
+    repo_map = build_repo_map(root, max_files=240, max_symbols=2000)
+    repo_map_paths = repo_map_relevant_paths(repo_map, terms, limit=LOCAL_CONTEXT_FILE_LIMIT)
+    likely_source_files = _likely_source_files(
+        root,
+        terms,
+        matches,
+        routing=routing,
+        repo_map_paths=repo_map_paths,
+    )
     return {
         "task_type": routing["task_type"],
         "target_family": routing["target_family"],
         "priority_paths": routing["priority_paths"],
         "priority_prefixes": routing["priority_prefixes"],
+        "repo_map_hints": repo_map_seed_text(repo_map, task, limit=24),
+        "repo_map": repo_map_seed_items(repo_map, task, limit=20),
         "likely_source_files": likely_source_files,
         "priority_file_matches": _priority_file_matches(root, terms, likely_source_files),
         "known_files_sample": files["matches"],
@@ -176,29 +192,18 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
             "priority_prefixes": ["docs/"],
         }
     if term_set & {"test", "tests", "pytest", "assert", "asserts", "verifies", "verify", "prove"}:
-        priority_paths: list[str] = []
-        if {"fastcontext", "explore_local", "exploration", "eval_local_explore"} & term_set:
-            priority_paths = [
-                "tests/test_fastcontext_local_explore.py",
-                "tests/test_fastcontext_cli.py",
-                "tests/test_local_explore_eval.py",
-            ]
         return {
             "task_type": "test_navigation",
             "target_family": "tests",
-            "priority_paths": priority_paths,
+            "priority_paths": [],
             "priority_prefixes": ["tests/"],
         }
     if term_set & {"mcp", "fastmcp"}:
         return {
             "task_type": "mcp_navigation",
             "target_family": "mcp",
-            "priority_paths": [
-                "src/source_scout/server.py",
-                "src/source_scout/models.py",
-                "tests/test_server.py",
-            ],
-            "priority_prefixes": ["tests/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
         }
     if {"status", "server", "loaded", "load", "smoke"} & term_set and (
         {"lmstudio", "studio", "fastcontext"} & term_set
@@ -206,12 +211,8 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
         return {
             "task_type": "cli_navigation",
             "target_family": "cli",
-            "priority_paths": [
-                "src/source_scout/__main__.py",
-                "src/source_scout/cli_status.py",
-                "src/source_scout/lmstudio.py",
-            ],
-            "priority_prefixes": ["src/source_scout/cli_"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/", "cli/", "tests/"],
         }
     if {
         "dataclass",
@@ -234,8 +235,8 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
         return {
             "task_type": "source_navigation",
             "target_family": "src",
-            "priority_paths": ["src/source_scout/models.py"],
-            "priority_prefixes": ["src/source_scout/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/"],
         }
     if {"github", "api", "rate_limit", "repository", "search", "calls", "requests"} & term_set and (
         {"github", "api", "rate_limit"} & term_set
@@ -243,49 +244,31 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
         return {
             "task_type": "source_navigation",
             "target_family": "src",
-            "priority_paths": ["src/source_scout/github_client.py"],
-            "priority_prefixes": ["src/source_scout/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/"],
         }
     if term_set & {"cli", "command", "commands", "parser", "argparse"}:
-        priority_paths = ["src/source_scout/__main__.py"]
-        if {"eval", "evals", "evaluation", "suite"} & term_set:
-            priority_paths.append("src/source_scout/local_explore_eval.py")
-        if {"status", "lmstudio", "fastcontext_status"} & term_set:
-            priority_paths.append("src/source_scout/cli_status.py")
         return {
             "task_type": "cli_navigation",
             "target_family": "cli",
-            "priority_paths": priority_paths,
-            "priority_prefixes": ["src/source_scout/cli_"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/", "cli/", "scripts/", "tests/"],
         }
     if {"fastcontext", "explore_local", "exploration", "tool_loop", "tool"} & term_set and (
         {"fastcontext", "explore_local", "exploration"} & term_set
     ):
-        priority_paths = ["src/source_scout/fastcontext.py"]
-        if {"localexploreresult", "result", "returns", "dataclass", "dataclasses"} & term_set:
-            priority_paths.append("src/source_scout/models.py")
-        if {"structured", "output", "schema", "response_format", "json"} & term_set:
-            priority_paths = [
-                "src/source_scout/lmstudio.py",
-                *priority_paths,
-            ]
         return {
             "task_type": "source_navigation",
             "target_family": "src",
-            "priority_paths": priority_paths,
-            "priority_prefixes": ["src/source_scout/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
         }
     if {"bundle", "bundles", "opened_bundle", "outcome", "outcomes"} & term_set:
         return {
             "task_type": "source_navigation",
             "target_family": "src",
-            "priority_paths": [
-                "src/source_scout/bundles.py",
-                "src/source_scout/server.py",
-                "src/source_scout/catalog.py",
-                "src/source_scout/models.py",
-            ],
-            "priority_prefixes": ["src/source_scout/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
         }
     if {"gemma", "profile", "profiles", "profiler", "gemma_profile"} & term_set and (
         {"strict", "json", "card", "cards", "repository"} & term_set
@@ -293,12 +276,8 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
         return {
             "task_type": "source_navigation",
             "target_family": "src",
-            "priority_paths": [
-                "src/source_scout/profiler.py",
-                "src/source_scout/catalog.py",
-                "src/source_scout/lmstudio.py",
-            ],
-            "priority_prefixes": ["src/source_scout/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
         }
     if {"evidence", "scanner", "scan", "dependency", "dependencies", "signal", "signals"} & term_set and (
         {"evidence", "scanner", "scan"} & term_set
@@ -306,11 +285,8 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
         return {
             "task_type": "source_navigation",
             "target_family": "src",
-            "priority_paths": [
-                "src/source_scout/evidence.py",
-                "src/source_scout/catalog.py",
-            ],
-            "priority_prefixes": ["src/source_scout/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
         }
     if {"eval", "evals", "evaluation", "suite"} & term_set and {
         "loaded",
@@ -321,38 +297,11 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
         "runner",
         "exposed",
     } & term_set:
-        if {"catalog", "top_1", "avoid"} & term_set:
-            priority_paths = [
-                "src/source_scout/eval_runner.py",
-                "tests/test_eval_runner.py",
-                "src/source_scout/local_explore_eval.py",
-                "tests/test_local_explore_eval.py",
-                "src/source_scout/assessment_eval.py",
-                "tests/test_assessment_eval.py",
-            ]
-        elif {"assessment", "assessor", "smoke"} & term_set:
-            priority_paths = [
-                "src/source_scout/assessment_eval.py",
-                "tests/test_assessment_eval.py",
-                "src/source_scout/eval_runner.py",
-                "tests/test_eval_runner.py",
-                "src/source_scout/local_explore_eval.py",
-                "tests/test_local_explore_eval.py",
-            ]
-        else:
-            priority_paths = [
-                "src/source_scout/local_explore_eval.py",
-                "tests/test_local_explore_eval.py",
-                "src/source_scout/eval_runner.py",
-                "tests/test_eval_runner.py",
-                "src/source_scout/assessment_eval.py",
-                "tests/test_assessment_eval.py",
-            ]
         return {
             "task_type": "eval_runner_navigation",
             "target_family": "eval_runner",
-            "priority_paths": priority_paths,
-            "priority_prefixes": ["src/source_scout/", "tests/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "evals/", "tests/"],
         }
     if {"catalog", "candidate", "candidates", "search_assets"} & term_set and (
         {
@@ -372,12 +321,8 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
         return {
             "task_type": "source_navigation",
             "target_family": "src",
-            "priority_paths": [
-                "src/source_scout/catalog.py",
-                "src/source_scout/capabilities.py",
-                "src/source_scout/evidence.py",
-            ],
-            "priority_prefixes": ["src/source_scout/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "app/", "lib/", "tests/"],
         }
     if term_set & {"golden", "fixture", "fixtures", "suite", "eval", "evals", "evaluation"}:
         return {
@@ -390,13 +335,8 @@ def _task_family_routing(terms: list[str]) -> dict[str, Any]:
         return {
             "task_type": "assessment_navigation",
             "target_family": "assessment",
-            "priority_paths": [
-                "src/source_scout/assessor.py",
-                "src/source_scout/assessment_eval.py",
-                "tests/test_assessor.py",
-                "tests/test_assessment_eval.py",
-            ],
-            "priority_prefixes": ["tests/"],
+            "priority_paths": [],
+            "priority_prefixes": ["src/", "tests/"],
         }
     return {
         "task_type": "source_navigation",
@@ -412,16 +352,20 @@ def _likely_source_files(
     grep_matches: list[dict[str, Any]],
     limit: int = 18,
     routing: dict[str, Any] | None = None,
+    repo_map_paths: list[str] | None = None,
 ) -> list[str]:
     scores: dict[str, int] = {}
     term_set = set(terms)
     active_routing = routing or _task_family_routing(terms)
+    for index, rel_path in enumerate(repo_map_paths or []):
+        scores[rel_path] = scores.get(rel_path, 0) + max(20, 96 - (index * 3))
     for match in grep_matches:
         path = match.get("path")
         if isinstance(path, str):
             priority, _ = _evidence_path_sort_key(path)
             scores[path] = scores.get(path, 0) + (3 if priority == 0 else 1)
             scores[path] += _task_family_path_bonus(path, active_routing)
+            scores[path] += _source_task_bias(path, term_set)
 
     for path in _iter_files(root):
         rel_path = _relative_path(root, path)
@@ -446,6 +390,7 @@ def _likely_source_files(
         if score:
             if rel_path.startswith(PRIMARY_SOURCE_PREFIXES):
                 score += 2
+            score += _source_task_bias(rel_path, term_set)
             scores[rel_path] = scores.get(rel_path, 0) + score
 
     ranked = sorted(
@@ -477,274 +422,50 @@ def _task_family_path_bonus(rel_path: str, routing: dict[str, Any]) -> int:
         bonus += 12
     if target_family == "evals" and normalized.startswith("evals/"):
         bonus += 14
-    if target_family == "eval_runner" and normalized in {
-        "src/source_scout/local_explore_eval.py",
-        "src/source_scout/eval_runner.py",
-        "src/source_scout/assessment_eval.py",
-        "tests/test_local_explore_eval.py",
-        "tests/test_eval_runner.py",
-        "tests/test_assessment_eval.py",
-    }:
-        bonus += 24
     if target_family == "cli":
-        if normalized == "src/source_scout/__main__.py":
-            bonus += 18
-        if normalized.startswith("tests/") and "cli" in normalized:
-            bonus += 10
+        if Path(normalized).name in {"__main__.py", "cli.py"} or "/cli" in normalized:
+            bonus += 12
     if target_family == "mcp":
-        if normalized in {"src/source_scout/server.py", "tests/test_server.py"}:
-            bonus += 18
+        if "server" in normalized or "mcp" in normalized:
+            bonus += 10
     if target_family == "assessment" and ("assessor" in normalized or "assessment" in normalized):
         bonus += 16
+    if target_family == "eval_runner" and ("eval" in normalized or normalized.startswith("evals/")):
+        if normalized.startswith("src/"):
+            bonus += 22
+        elif normalized.startswith("tests/"):
+            bonus += 16
+        else:
+            bonus += 6
     return bonus
+
+
+def _source_task_bias(rel_path: str, term_set: set[str]) -> int:
+    normalized = rel_path.replace("\\", "/").lower()
+    if normalized.startswith(("src/", "app/", "components/", "lib/")):
+        return 10
+    if normalized.startswith("tests/") and not (term_set & {"test", "tests", "pytest", "spec"}):
+        return -24
+    if normalized.startswith("evals/") and not (
+        term_set & {"eval", "evals", "evaluation", "fixture", "fixtures", "golden"}
+    ):
+        return -24
+    if normalized.startswith("docs/") and not (
+        term_set & {"docs", "documentation", "readme", "usage"}
+    ):
+        return -24
+    if "/fixtures/" in normalized and not (term_set & {"fixture", "fixtures", "golden"}):
+        return -24
+    return 0
 
 
 def _task_file_bonus(rel_path: str, term_set: set[str]) -> int:
     normalized = rel_path.replace("\\", "/")
     bonus = _generic_local_task_file_bonus(normalized, term_set)
-    if normalized == "src/source_scout/pipeline.py":
-        if {"scout", "freshness", "created", "pushed", "query", "queries"} & term_set:
-            bonus += 14
-        if {
-            "qualification",
-            "rejects",
-            "reject",
-            "archived",
-            "forked",
-            "template",
-            "mirror",
-            "oversized",
-            "docs_only",
-            "vendor_heavy",
-        } & term_set:
-            bonus += 14
-    if (
-        normalized == "src/source_scout/constants.py"
-        and {
-            "freshness",
-            "created",
-            "pushed",
-            "size",
-            "stale",
-        }
-        & term_set
-    ):
-        bonus += 10
-    if (
-        normalized == "src/source_scout/catalog.py"
-        and {
-            "catalog",
-            "assets",
-            "asset",
-            "searched",
-            "scored",
-            "search",
-            "score",
-            "gemma",
-            "profile",
-            "capability",
-            "intent",
-        }
-        & term_set
-    ):
-        bonus += 100
-    if (
-        normalized == "src/source_scout/evidence.py"
-        and {
-            "evidence",
-            "scanner",
-            "scan",
-            "dependency",
-            "dependencies",
-            "signal",
-            "signals",
-        }
-        & term_set
-    ):
-        bonus += 100
-    if (
-        normalized == "src/source_scout/profiler.py"
-        and {
-            "gemma",
-            "profile",
-            "profiles",
-            "profiler",
-            "strict",
-            "json",
-        }
-        & term_set
-    ):
-        bonus += 100
-    if (
-        normalized == "src/source_scout/local_explore_eval.py"
-        and {
-            "local_explore",
-            "explore_local",
-            "exploration",
-            "eval",
-            "suite",
-            "scored",
-            "loaded",
-        }
-        & term_set
-    ):
-        bonus += 80
-    if (
-        normalized == "src/source_scout/eval_runner.py"
-        and {
-            "catalog",
-            "golden",
-            "eval",
-            "suite",
-            "scored",
-            "loaded",
-            "summarized",
-        }
-        & term_set
-    ):
-        bonus += 90
-    if (
-        normalized == "src/source_scout/assessment_eval.py"
-        and {
-            "assessment",
-            "assessor",
-            "eval",
-            "suite",
-            "smoke",
-        }
-        & term_set
-    ):
-        bonus += 50
-    if (
-        normalized == "src/source_scout/server.py"
-        and {
-            "mcp",
-            "tool",
-            "tools",
-            "server",
-            "exposed",
-            "read_only",
-        }
-        & term_set
-    ):
-        bonus += 14
-    if (
-        normalized == "src/source_scout/bundles.py"
-        and {
-            "bundle",
-            "bundles",
-            "opened_bundle",
-            "source",
-        }
-        & term_set
-    ):
-        if {"source", "created", "opened_bundle", "recorded"} & term_set:
-            bonus += 100
-        else:
-            bonus += 20
-    if (
-        normalized == "src/source_scout/models.py"
-        and {
-            "dataclass",
-            "dataclasses",
-            "model",
-            "models",
-            "result",
-            "results",
-            "shape",
-            "shapes",
-            "candidate",
-            "bundle",
-            "outcome",
-            "explore_local",
-        }
-        & term_set
-    ):
-        bonus += 100
-    if (
-        normalized == "src/source_scout/fastcontext.py"
-        and {
-            "fastcontext",
-            "explore_local",
-            "exploration",
-            "tool_loop",
-            "loop",
-            "sandbox",
-            "sandboxed",
-            "structured",
-            "output",
-            "schema",
-            "read_only",
-        }
-        & term_set
-    ):
-        bonus += 100
-    if (
-        normalized == "src/source_scout/lmstudio.py"
-        and {
-            "lm",
-            "studio",
-            "lmstudio",
-            "structured",
-            "output",
-            "schema",
-            "json",
-            "response_format",
-        }
-        & term_set
-    ):
-        bonus += 80
     if normalized == "README.md" and {"documentation", "docs", "readme", "usage"} & term_set:
         bonus += 18
     if normalized == "AGENTS.md" and {"documentation", "docs", "agents", "usage"} & term_set:
         bonus += 12
-    if (
-        normalized == "tests/test_fastcontext_local_explore.py"
-        and {
-            "exploration",
-            "explore_local",
-            "read_only",
-            "citation",
-            "citations",
-            "validates",
-        }
-        & term_set
-    ):
-        bonus += 70
-    if (
-        normalized == "tests/test_local_explore_eval.py"
-        and {
-            "local_explore",
-            "eval",
-            "eval_local_explore",
-            "exploration",
-        }
-        & term_set
-    ):
-        bonus += 60
-    if (
-        normalized == "tests/test_fastcontext_cli.py"
-        and {
-            "cli",
-            "command",
-            "commands",
-            "explore_local",
-            "fastcontext_status",
-        }
-        & term_set
-    ):
-        bonus += 60
-    if (
-        normalized == "tests/test_eval_runner.py"
-        and {
-            "catalog",
-            "golden",
-            "eval",
-            "suite",
-        }
-        & term_set
-    ):
-        bonus += 60
     return bonus
 
 
@@ -754,275 +475,79 @@ def _generic_local_task_file_bonus(normalized: str, term_set: set[str]) -> int:
     parts = set(normalized.lower().replace("-", "_").replace("/", "_").split("_"))
     if stem in term_set or parts & term_set:
         bonus += 6
-    if normalized.startswith(("app/", "components/", "lib/")):
+    if normalized.startswith(("src/", "app/", "components/", "lib/")):
         bonus += 8
     if normalized.startswith("lib/"):
         bonus += 6
-    if (
-        normalized.endswith("protein-requirements.ts")
-        and {
-            "protein",
-            "requirement",
-            "requirements",
-            "grams",
-            "energy_percent",
-        }
-        & term_set
+    if {"api", "route", "handler", "endpoint"} & term_set and (
+        "/api/" in normalized or normalized.endswith(("/route.ts", "/route.js", "/route.py"))
     ):
-        bonus += 120
-    if (
-        normalized.endswith(("nutrition-risk.ts", "nutrition-risk-banner.tsx"))
-        and {
-            "nutrition",
-            "risk",
-            "screening",
-            "previous",
-            "weight",
-            "bmi",
-        }
-        & term_set
+        bonus += 18
+    if {"cli", "command", "commands", "argparse", "script"} & term_set and (
+        Path(normalized).name in {"__main__.py", "cli.py"}
+        or "/cli" in normalized
+        or "/scripts/" in normalized
     ):
-        bonus += 120
-    if (
-        normalized.endswith("bmi-form.tsx")
-        and {
-            "bmi",
-            "calculator",
-            "submit",
-            "form",
-            "tdee",
-            "mifflin",
-            "risk",
-        }
-        & term_set
+        bonus += 18
+    if {"mcp", "tool", "tools", "server"} & term_set and ("mcp" in normalized or "server" in normalized):
+        bonus += 16
+    if {"eval", "evals", "evaluation", "suite", "golden"} & term_set and (
+        "eval" in normalized or normalized.startswith("evals/")
     ):
-        bonus += 90
-    if (
-        normalized.endswith("bmi-math.ts")
-        and {
-            "bmi",
-            "mifflin",
-            "tdee",
-            "henry",
-            "nasem",
-            "energy",
-        }
-        & term_set
+        bonus += 16
+    if {"test", "tests", "pytest", "spec"} & term_set and (
+        normalized.startswith("tests/") or Path(normalized).name.startswith("test_") or ".spec." in normalized
     ):
-        bonus += 120
-    if (
-        normalized.endswith("inntak-form.tsx")
-        and {
-            "intake",
-            "inntak",
-            "registration",
-            "meal",
-            "meals",
-            "summary",
-            "active",
-        }
-        & term_set
+        bonus += 16
+    if {"model", "models", "schema", "dataclass", "types"} & term_set and any(
+        part in normalized for part in ("model", "schema", "types", "dataclass")
     ):
-        bonus += 120
-    if (
-        normalized.endswith("use-intake-form-state.ts")
-        and {
-            "state",
-            "active",
-            "day",
-            "meal",
-            "copy",
-            "update",
-            "item",
-            "localstorage",
-            "lifecycle",
-        }
-        & term_set
+        bonus += 14
+    if {"dataclass", "dataclasses", "model", "models", "result", "results", "shape", "types"} & term_set:
+        if Path(normalized).stem.lower() in {"model", "models", "schema", "schemas", "type", "types"}:
+            bonus += 24
+    if {"catalog", "store", "storage", "database", "duckdb", "cache"} & term_set and any(
+        part in normalized for part in ("catalog", "store", "storage", "database", "db", "cache")
     ):
-        bonus += 120
-    if (
-        normalized.endswith("storage-lifecycle.ts")
-        and {
-            "storage",
-            "localstorage",
-            "lifecycle",
-            "stored",
-            "write",
-            "read",
-        }
-        & term_set
+        bonus += 14
+    if {"bundle", "bundles", "artifact", "manifest"} & term_set and any(
+        part in normalized for part in ("bundle", "artifact", "manifest")
     ):
-        bonus += 100
-    if (
-        normalized.endswith("app/api/parse-food/route.ts")
-        and {
-            "parse",
-            "food",
-            "api",
-            "route",
-            "openai",
-            "trace",
-        }
-        & term_set
+        bonus += 14
+    if {"llm", "model", "openai", "lmstudio", "studio", "fastcontext"} & term_set and any(
+        part in normalized for part in ("llm", "model", "openai", "lmstudio", "studio", "fastcontext")
     ):
-        bonus += 120
-    if (
-        normalized.endswith("openai-parser.ts")
-        and {
-            "openai",
-            "parser",
-            "parse",
-            "schema",
-            "prompt",
-            "normalization",
-            "normalize",
-            "reject",
-            "malformed",
-        }
-        & term_set
+        bonus += 14
+    if {"rag", "retrieval", "search", "vector", "embedding"} & term_set and any(
+        part in normalized for part in ("rag", "retrieval", "search", "vector", "embed")
     ):
-        bonus += 120
-    if (
-        normalized.endswith("matcher.ts")
-        and {
-            "matching",
-            "matcher",
-            "lexical",
-            "alias",
-            "semantic",
-            "modifier",
-            "portion",
-            "decision",
-        }
-        & term_set
-    ):
-        bonus += 120
-    if (
-        normalized.endswith("decision.ts")
-        and {
-            "decision",
-            "auto_select",
-            "needs_review",
-            "manual_required",
-            "threshold",
-        }
-        & term_set
-    ):
-        bonus += 110
-    if (
-        normalized.endswith("semantic-search.ts")
-        and {
-            "semantic",
-            "supabase",
-            "pgvector",
-            "embedding",
-            "embeds",
-            "rpc",
-        }
-        & term_set
-    ):
-        bonus += 130
-    if (
-        normalized.endswith(("app/api/food-search/route.ts", "food-search-client.ts"))
-        and {
-            "food_search",
-            "manual",
-            "matvaretabellen",
-            "lookup",
-            "direct",
-            "api",
-        }
-        & term_set
-    ):
-        bonus += 120
-    if (
-        normalized.endswith("meal-section.tsx")
-        and {
-            "meal",
-            "manual",
-            "search",
-            "lookup",
-            "food",
-        }
-        & term_set
-    ):
-        bonus += 90
-    if (
-        normalized.endswith(("daily-summary-view.tsx", "daily-totals.tsx", "intake-math.ts"))
-        and {
-            "daily",
-            "average",
-            "summary",
-            "macro",
-            "micro",
-            "nutrient",
-            "totals",
-            "safety",
-        }
-        & term_set
-    ):
-        bonus += 110
-    if (
-        normalized.endswith(
-            (
-                "intake-export-panel.tsx",
-                "session.ts",
-                "intake-print-view.tsx",
-                "report-html.ts",
-            )
-        )
-        and {
-            "export",
-            "print",
-            "report",
-            "session",
-            "comparison",
-            "summary",
-        }
-        & term_set
-    ):
-        bonus += 110
-    if (
-        normalized.endswith("tests/inntak-ui.spec.ts")
-        and {
-            "seeded",
-            "intake",
-            "inntak",
-            "manual",
-            "styling",
-            "portion",
-            "helpers",
-        }
-        & term_set
-    ):
-        bonus += 140
-    if (
-        normalized.endswith("tests/kalkulator-ui.spec.ts")
-        and {
-            "calculator",
-            "kalkulator",
-            "desktop",
-            "mobile",
-            "protein",
-            "clinical",
-            "source",
-        }
-        & term_set
-    ):
-        bonus += 140
-    if (
-        normalized.endswith(("app/layout.tsx", "components/ui/app-nav.tsx", "app/page.tsx"))
-        and {
-            "routing",
-            "navigation",
-            "redirect",
-            "layout",
-            "links",
-            "shell",
-        }
-        & term_set
-    ):
-        bonus += 100
+        bonus += 14
+    if {
+        "active",
+        "component",
+        "form",
+        "layout",
+        "navigation",
+        "page",
+        "registration",
+        "section",
+        "shell",
+        "tabs",
+        "ui",
+    } & term_set and normalized.endswith((".tsx", ".jsx")):
+        bonus += 16
+    if {"manual", "lookup", "search", "direct", "ui"} & term_set:
+        if normalized.startswith("components/"):
+            bonus += 12
+        if "/api/" in normalized or "client" in normalized:
+            bonus += 16
+    if {"routing", "navigation", "redirect", "layout", "links", "shell"} & term_set:
+        if Path(normalized).name in {"layout.tsx", "layout.jsx", "layout.ts", "layout.js"}:
+            bonus += 24
+        if Path(normalized).name in {"page.tsx", "page.jsx", "page.ts", "page.js"}:
+            bonus += 16
+        if "nav" in normalized or "navigation" in normalized:
+            bonus += 24
     return bonus
 
 
@@ -1036,6 +561,13 @@ def _seed_path_priority(
     priority_paths = [str(item) for item in active_routing.get("priority_paths", [])]
     if normalized in priority_paths:
         return -20 + priority_paths.index(normalized)
+    if active_routing.get("target_family") == "eval_runner":
+        if normalized.startswith("src/") and "eval" in normalized:
+            return -3
+        if normalized.startswith("tests/") and "eval" in normalized:
+            return -2
+        if normalized.startswith("evals/"):
+            return -1
     for prefix in active_routing.get("priority_prefixes", []):
         if normalized.startswith(str(prefix)):
             return -1

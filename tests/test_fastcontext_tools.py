@@ -321,143 +321,55 @@ def test_evidence_budget_detects_too_many_files() -> None:
     assert result.accepted_file_count == fastcontext.MAX_FINAL_FILES
 
 
-def test_local_seed_context_prioritizes_known_project_files(tmp_path: Path) -> None:
-    root = tmp_path / "source_scout"
-    (root / "src" / "source_scout").mkdir(parents=True)
+def test_local_seed_context_uses_generated_repo_map_without_repo_specific_paths(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generic_project"
+    (root / "src" / "app").mkdir(parents=True)
     (root / "tests").mkdir()
     (root / "evals" / "golden").mkdir(parents=True)
-    for name in [
-        "bundles.py",
-        "catalog.py",
-        "capabilities.py",
-        "cli_status.py",
-        "constants.py",
-        "evidence.py",
-        "fastcontext.py",
-        "github_client.py",
-        "lmstudio.py",
-        "local_explore_eval.py",
-        "models.py",
-        "pipeline.py",
-        "profiler.py",
-        "server.py",
-        "__main__.py",
-    ]:
-        (root / "src" / "source_scout" / name).write_text(
-            "repository catalog ranking scoring freshness archived template mirror\n",
-            encoding="utf-8",
-        )
-    (root / "src" / "source_scout" / "assessment_eval.py").write_text(
-        "assessment eval suite loading metrics\n",
+    (root / "src" / "app" / "catalog_store.py").write_text(
+        "def search_assets():\n    return []\n",
         encoding="utf-8",
     )
-    (root / "tests" / "test_assessor.py").write_text(
-        "def test_unknown_evidence_id_repair(): assert True\n",
+    (root / "src" / "app" / "mcp_server.py").write_text(
+        "@mcp.tool()\ndef find_reusable_code():\n    pass\n",
         encoding="utf-8",
     )
-    (root / "evals" / "golden" / "assessment_smoke_v1.json").write_text(
-        '{"suite_id":"assessment-smoke"}\n',
+    (root / "src" / "app" / "cli.py").write_text(
+        "subparsers.add_parser('catalog')\n",
         encoding="utf-8",
     )
-    (root / "README.md").write_text(
-        "Standalone local exploration usage documentation\n",
+    (root / "tests" / "test_catalog_store.py").write_text(
+        "def test_search_assets():\n    assert True\n",
         encoding="utf-8",
     )
-    (root / "AGENTS.md").write_text("FastContext local usage\n", encoding="utf-8")
+    (root / "evals" / "golden" / "catalog_v1.json").write_text(
+        '{"suite_id":"catalog-suite","tasks":[{"id":"catalog_search"}]}\n',
+        encoding="utf-8",
+    )
 
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where repository qualification rejects archived template mirror repos.",
-    )["likely_source_files"][0] == "src/source_scout/pipeline.py"
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where reusable catalog candidates are scored with capability intent and Gemma profile signals.",
-    )["likely_source_files"][0] == "src/source_scout/catalog.py"
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where LM Studio status and FastContext status commands are registered and implemented.",
-    )["likely_source_files"][:2] == [
-        "src/source_scout/__main__.py",
-        "src/source_scout/cli_status.py",
-    ]
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where the local exploration eval suite is loaded, scored, and exposed as a CLI command.",
-    )["likely_source_files"][:2] == [
-        "src/source_scout/__main__.py",
-        "src/source_scout/local_explore_eval.py",
-    ]
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where catalog assets are searched and scored with Gemma profile weighting.",
-    )["likely_source_files"][:2] == [
-        "src/source_scout/catalog.py",
-        "src/source_scout/capabilities.py",
-    ]
-    assert fastcontext._local_seed_context(
-        root,
-        "Find the project documentation that explains standalone local exploration usage.",
-    )["likely_source_files"][:2] == ["README.md", "AGENTS.md"]
-    assert fastcontext._local_seed_context(
-        root,
-        "Find tests that verify assessor repair behavior for unknown evidence IDs.",
-    )["likely_source_files"][0] == "tests/test_assessor.py"
-    assert fastcontext._local_seed_context(
-        root,
-        "Find the golden assessment eval fixture suite.",
-    )["likely_source_files"][0] == "evals/golden/assessment_smoke_v1.json"
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where source bundles are created and opened_bundle reuse outcomes are recorded.",
-    )["likely_source_files"][:2] == [
-        "src/source_scout/bundles.py",
-        "src/source_scout/server.py",
-    ]
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where Gemma profiles repository cards into strict JSON and stores gemma_profile.",
-    )["likely_source_files"][0] == "src/source_scout/profiler.py"
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where deterministic evidence scanner records dependency and capability signals.",
-    )["likely_source_files"][0] == "src/source_scout/evidence.py"
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where GitHub API requests, rate-limit handling, and repository search calls are implemented.",
-    )["likely_source_files"][0] == "src/source_scout/github_client.py"
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where FastContext local exploration runs the tool loop and returns LocalExploreResult.",
-    )["likely_source_files"][:2] == [
-        "src/source_scout/fastcontext.py",
-        "src/source_scout/models.py",
-    ]
-    assert fastcontext._local_seed_context(
-        root,
-        "Find where FastContext sends LM Studio structured output schema and falls back to robust parsing.",
-    )["likely_source_files"][:2] == [
-        "src/source_scout/lmstudio.py",
-        "src/source_scout/fastcontext.py",
-    ]
-    assert fastcontext._local_seed_context(
-        root,
-        "Find the dataclasses that define reusable candidates, bundles, outcomes, "
-        "and local exploration results.",
-    )["likely_source_files"][0] == "src/source_scout/models.py"
-    seed = fastcontext._local_seed_context(
-        root,
-        "Find where repository qualification rejects archived template mirror repos.",
-    )
-    priority_paths = fastcontext._seed_priority_paths(seed)
-    assert priority_paths[0] == "src/source_scout/pipeline.py"
-    assert "src/source_scout/constants.py" in priority_paths
     catalog_seed = fastcontext._local_seed_context(
         root,
-        "Find where reusable catalog candidates are scored with capability intent and Gemma profile signals.",
+        "Find where catalog search_assets scoring is implemented.",
     )
+    mcp_seed = fastcontext._local_seed_context(
+        root,
+        "Find the MCP tool that exposes find_reusable_code.",
+    )
+    eval_seed = fastcontext._local_seed_context(
+        root,
+        "Find the golden eval fixture suite file.",
+    )
+
+    assert catalog_seed["likely_source_files"][0] == "src/app/catalog_store.py"
+    assert mcp_seed["likely_source_files"][0] == "src/app/mcp_server.py"
+    assert eval_seed["likely_source_files"][0] == "evals/golden/catalog_v1.json"
+    assert "Generated repo map hints" in catalog_seed["repo_map_hints"]
+    assert catalog_seed["repo_map"]
     assert catalog_seed["priority_file_matches"]
-    assert catalog_seed["priority_file_matches"][0]["path"] == "src/source_scout/catalog.py"
-    assert "citation" in catalog_seed["priority_file_matches"][0]
+    assert catalog_seed["priority_file_matches"][0]["path"] == "src/app/catalog_store.py"
+    assert fastcontext._seed_priority_paths(catalog_seed)[0] == "src/app/catalog_store.py"
 
 
 def test_final_answer_choices_prioritize_primary_source_paths() -> None:

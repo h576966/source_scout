@@ -371,6 +371,7 @@ async def _run_tool_loop(
     final_answer_retry_used = False
     budget_retry_used = False
     priority_retry_used = False
+    no_tool_nudge_used = False
     for turn in range(1, max(1, max_turns) + 1):
         allow_tools = not final_answer_only_next
         completion = await _chat_fastcontext_completion(
@@ -557,6 +558,15 @@ async def _run_tool_loop(
             turn_record.setdefault("validation_notes", []).append(
                 "Model returned tool calls during final-answer-only turn; reopening tools."
             )
+
+        if allow_tools and active_priority_paths and not no_tool_nudge_used and turn < max_turns:
+            turn_record.setdefault("validation_notes", []).append(
+                "Model did not call a tool; nudging it to inspect generated priority paths."
+            )
+            active_messages.extend(_no_tool_priority_nudge_messages(content, active_priority_paths))
+            no_tool_nudge_used = True
+            final_answer_only_next = False
+            continue
 
         if not allow_tools and observation_support.ranges and not final_answer_retry_used:
             active_messages.extend(
@@ -917,6 +927,25 @@ def _final_response_feedback_messages(
             "content": (
                 f"{feedback} Use Read, Glob, or Grep again only if more evidence is needed, "
                 "then return final_answer JSON with exact path:start-end evidence paths."
+            ),
+        },
+    ]
+
+
+def _no_tool_priority_nudge_messages(
+    content: str,
+    priority_paths: list[str],
+) -> list[dict[str, Any]]:
+    path_lines = "\n".join(f"- {path}" for path in priority_paths[:5])
+    return [
+        {"role": "assistant", "content": content},
+        {
+            "role": "user",
+            "content": (
+                "You did not call a tool. The generated repo map found likely relative paths. "
+                "Do not answer from the repo map alone. Call Read on the strongest exact path below, "
+                "or call Grep if none is clearly right, then cite only observed line ranges.\n\n"
+                f"{path_lines}"
             ),
         },
     ]
@@ -1734,6 +1763,8 @@ def _local_messages(
             "Use relative tool paths like src/source_scout/server.py, not shortened pseudo-absolute paths.",
             "Treat seed_context.likely_source_files as ordered; inspect the first relevant "
             "entries before broad search.",
+            "Treat seed_context.repo_map and seed_context.repo_map_hints as generated navigation hints, "
+            "not final evidence or proof.",
             "Use seed_context.priority_file_matches as starting line anchors for Read offsets "
             "when they are present.",
             "Prefer primary source tree files over docs, generated, build, vendor, sample, and fixture code "
@@ -1752,7 +1783,9 @@ def _local_messages(
                 "Use the provided Read, Glob, and Grep tools. The user context includes the absolute "
                 "workspace root; do not shorten or invent paths. Treat seed_context.likely_source_files "
                 "as ordered and inspect the first relevant entries before broad search. Start broad only "
-                "when the ordered hints are insufficient, then narrow down. Use "
+                "when the ordered hints are insufficient, then narrow down. Treat seed_context.repo_map "
+                "and seed_context.repo_map_hints as generated navigation hints only; verify them with "
+                "Read, Glob, or Grep before citing. Use "
                 "seed_context.priority_file_matches as line anchors for Read offsets before "
                 "reading module headers. Prefer primary "
                 "source tree files over docs, generated output, build output, "
