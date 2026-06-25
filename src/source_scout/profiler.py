@@ -31,9 +31,10 @@ def _profile_messages(card: dict[str, Any]) -> list[dict[str, str]]:
         {
             "role": "system",
             "content": (
-                "You profile public GitHub repositories for reusable Next.js, React, "
-                "TypeScript UI code. Return only valid JSON. Be conservative and do "
-                "not claim capabilities without structural evidence."
+                "You profile public GitHub repositories for reusable TypeScript, "
+                "JavaScript, Python, AI, data, and web application source. Return "
+                "only valid JSON. Be conservative and do not claim capabilities "
+                "without structural evidence."
             ),
         },
         {

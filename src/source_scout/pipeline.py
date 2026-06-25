@@ -1,4 +1,6 @@
 import json
+import re
+import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -11,7 +13,7 @@ from .github_client import get_client
 
 UI_RECENCY_DAYS = MAX_STALE_DAYS
 CARD_VERSION = "repo-card-v1"
-SOURCE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx"}
+SOURCE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".py"}
 GENERATED_VENDOR_DIRS = {
     "dist",
     "generated",
@@ -25,7 +27,48 @@ LOCKFILE_NAMES = {
     "npm-shrinkwrap.json",
     "package-lock.json",
     "pnpm-lock.yaml",
+    "poetry.lock",
+    "uv.lock",
     "yarn.lock",
+}
+PYTHON_MANIFEST_NAMES = {
+    "pyproject.toml",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "uv.lock",
+    "poetry.lock",
+    "environment.yml",
+}
+PYTHON_AI_DATA_DEPENDENCIES = {
+    "anthropic",
+    "chromadb",
+    "duckdb",
+    "fastapi",
+    "gradio",
+    "instructor",
+    "langchain",
+    "litellm",
+    "llama-index",
+    "openai",
+    "pandas",
+    "polars",
+    "pydantic",
+    "qdrant-client",
+    "sentence-transformers",
+    "streamlit",
+    "transformers",
+    "typer",
+}
+NODE_AI_DEPENDENCIES = {
+    "@ai-sdk/openai",
+    "@ai-sdk/react",
+    "@ai-sdk/anthropic",
+    "@langchain/core",
+    "ai",
+    "anthropic",
+    "langchain",
+    "ollama",
+    "openai",
 }
 
 NEXTJS_UI_CAPABILITIES = {
@@ -40,6 +83,24 @@ NEXTJS_UI_CAPABILITIES = {
     "charts": "charts recharts dashboard",
     "admin-interface": "admin dashboard interface",
 }
+PERSONAL_CODE_QUERY_PACKS = [
+    ("dashboard", "dashboard admin nextjs react tailwind", "TypeScript"),
+    ("data-table", "\"data table\" tanstack table nextjs", "TypeScript"),
+    ("forms", "react-hook-form zod nextjs form validation", "TypeScript"),
+    ("route-handlers", "nextjs route handler api route", "TypeScript"),
+    ("server-actions", "\"use server\" \"server actions\" nextjs", "TypeScript"),
+    ("data-access", "drizzle prisma database schema nextjs", "TypeScript"),
+    ("node-ai-sdk", "\"ai sdk\" openai anthropic nextjs", "TypeScript"),
+    ("model-server-integration", "\"openai compatible\" lm studio ollama", "TypeScript"),
+    ("llm-harness", "\"llm\" harness structured output tool calling", "Python"),
+    ("local-ai-integration", "\"local ai\" ollama lmstudio llama.cpp", "Python"),
+    ("rag-retrieval", "rag retrieval embeddings vector search", "Python"),
+    ("eval-harness", "llm eval benchmark golden tasks", "Python"),
+    ("data-pipeline", "duckdb polars pandas data pipeline", "Python"),
+    ("python-api", "fastapi pydantic openai api", "Python"),
+    ("python-cli", "typer cli openai data tool", "Python"),
+]
+SUPPORTED_SCOUT_DOMAINS = {"nextjs-ui", "personal-code"}
 
 
 def recency_cutoff(days: int = UI_RECENCY_DAYS) -> str:
@@ -48,13 +109,12 @@ def recency_cutoff(days: int = UI_RECENCY_DAYS) -> str:
     return cutoff.strftime("%Y-%m-%d")
 
 
-def build_nextjs_ui_queries() -> list[tuple[str, str]]:
+def _shared_qualifiers(language: str) -> str:
     created_cutoff = recency_cutoff(MAX_REPO_AGE_DAYS)
     pushed_cutoff = recency_cutoff(MAX_STALE_DAYS)
-    queries: list[tuple[str, str]] = []
-    qualifiers = (
+    return (
         "in:name,description,topics,readme "
-        "language:TypeScript "
+        f"language:{language} "
         "archived:false "
         "mirror:false "
         "template:false "
@@ -63,19 +123,40 @@ def build_nextjs_ui_queries() -> list[tuple[str, str]]:
         f"created:>={created_cutoff} "
         f"pushed:>={pushed_cutoff}"
     )
+
+
+def build_nextjs_ui_queries() -> list[tuple[str, str]]:
+    queries: list[tuple[str, str]] = []
+    qualifiers = _shared_qualifiers("TypeScript")
     for capability, terms in NEXTJS_UI_CAPABILITIES.items():
         queries.append((capability, f"{terms} {qualifiers}"))
     return queries
 
 
+def build_personal_code_queries() -> list[tuple[str, str]]:
+    queries: list[tuple[str, str]] = []
+    for capability, terms, language in PERSONAL_CODE_QUERY_PACKS:
+        queries.append((capability, f"{terms} {_shared_qualifiers(language)}"))
+    return queries
+
+
+def build_domain_queries(domain: str) -> list[tuple[str, str]]:
+    if domain == "nextjs-ui":
+        return build_nextjs_ui_queries()
+    if domain == "personal-code":
+        return build_personal_code_queries()
+    raise ValueError(f"Unsupported scout domain: {domain}")
+
+
 async def scout(domain: str, limit: int) -> dict[str, int]:
-    if domain != "nextjs-ui":
-        raise ValueError("Only the 'nextjs-ui' scouting domain is supported in this POC.")
+    if domain not in SUPPORTED_SCOUT_DOMAINS:
+        supported = ", ".join(sorted(SUPPORTED_SCOUT_DOMAINS))
+        raise ValueError(f"Unsupported scout domain '{domain}'. Supported domains: {supported}.")
 
     client = get_client()
     seen: set[str] = set()
     stored = 0
-    for capability, query in build_nextjs_ui_queries():
+    for capability, query in build_domain_queries(domain):
         if stored >= limit:
             break
         per_page = min(100, max(10, limit - stored))
@@ -85,7 +166,7 @@ async def scout(domain: str, limit: int) -> dict[str, int]:
             if not full_name or full_name in seen:
                 continue
             seen.add(full_name)
-            catalog.upsert_repository(repo, f"scout:nextjs-ui:{capability}")
+            catalog.upsert_repository(repo, f"scout:{domain}:{capability}")
             stored += 1
             if stored >= limit:
                 break
@@ -184,6 +265,81 @@ def _package_manifests(root: Path) -> dict[str, Any]:
     return manifests
 
 
+def _normalize_dependency_name(raw: str) -> str:
+    value = raw.strip().split(";", 1)[0].strip()
+    value = re.split(r"[<>=~! \[]", value, maxsplit=1)[0]
+    return value.strip().lower().replace("_", "-")
+
+
+def _python_dependency_dict(values: list[str]) -> dict[str, str]:
+    dependencies: dict[str, str] = {}
+    for value in values:
+        name = _normalize_dependency_name(value)
+        if name and not name.startswith("#"):
+            dependencies[name] = ""
+    return dependencies
+
+
+def _python_manifests(root: Path) -> dict[str, Any]:
+    manifests: dict[str, Any] = {}
+    for path in root.rglob("*"):
+        if not path.is_file() or path.name not in PYTHON_MANIFEST_NAMES:
+            continue
+        rel = path.relative_to(root)
+        if any(part in SKIP_DIRS for part in rel.parts):
+            continue
+        if path.name == "pyproject.toml":
+            try:
+                parsed = tomllib.loads(path.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, tomllib.TOMLDecodeError):
+                continue
+            project = parsed.get("project", {}) if isinstance(parsed, dict) else {}
+            dependencies = list(project.get("dependencies", [])) if isinstance(project, dict) else []
+            optional = project.get("optional-dependencies", {}) if isinstance(project, dict) else {}
+            dev_dependencies: list[str] = []
+            if isinstance(optional, dict):
+                for values in optional.values():
+                    if isinstance(values, list):
+                        dev_dependencies.extend(str(value) for value in values)
+            tool = parsed.get("tool", {}) if isinstance(parsed, dict) else {}
+            poetry = tool.get("poetry", {}) if isinstance(tool, dict) else {}
+            if isinstance(poetry, dict):
+                poetry_deps = poetry.get("dependencies", {})
+                if isinstance(poetry_deps, dict):
+                    dependencies.extend(str(name) for name in poetry_deps if str(name).lower() != "python")
+                poetry_dev = poetry.get("dev-dependencies", {})
+                if isinstance(poetry_dev, dict):
+                    dev_dependencies.extend(str(name) for name in poetry_dev)
+            manifests[rel.as_posix()] = {
+                "name": project.get("name") if isinstance(project, dict) else None,
+                "dependencies": _python_dependency_dict([str(value) for value in dependencies]),
+                "devDependencies": _python_dependency_dict(dev_dependencies),
+            }
+            continue
+        if path.name.startswith("requirements") and path.suffix == ".txt":
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            dependencies = [
+                line.strip()
+                for line in lines
+                if line.strip() and not line.lstrip().startswith(("#", "-"))
+            ]
+            manifests[rel.as_posix()] = {
+                "name": None,
+                "dependencies": _python_dependency_dict(dependencies),
+                "devDependencies": {},
+            }
+            continue
+        manifests[rel.as_posix()] = {
+            "name": None,
+            "dependencies": {},
+            "devDependencies": {},
+        }
+    return manifests
+
+
 def _dependency_names(manifests: dict[str, Any]) -> set[str]:
     names: set[str] = set()
     for manifest in manifests.values():
@@ -201,17 +357,28 @@ def _has_generated_vendor_part(rel_path: str) -> bool:
 def build_repository_card(snapshot_root: Path) -> dict[str, Any]:
     files = _walk_files(snapshot_root)
     manifests = _package_manifests(snapshot_root)
+    manifests.update(_python_manifests(snapshot_root))
     deps = _dependency_names(manifests)
+    lower_deps = {dep.lower() for dep in deps}
     source_files = [p for p in files if Path(p).suffix in SOURCE_EXTENSIONS]
     usable_source_files = [p for p in source_files if not _has_generated_vendor_part(p)]
     tsx_files = [p for p in files if p.endswith(".tsx")]
+    js_ts_files = [p for p in files if p.endswith((".ts", ".tsx", ".js", ".jsx"))]
+    python_files = [p for p in files if p.endswith(".py")]
     generated_vendor_files = [p for p in files if _has_generated_vendor_part(p)]
     lockfiles = [p for p in files if Path(p).name in LOCKFILE_NAMES]
+    python_manifest_paths = [p for p in manifests if Path(p).name in PYTHON_MANIFEST_NAMES]
     stack_signals = {
         "has_react_dependency": "react" in deps,
         "has_next_dependency": "next" in deps,
         "has_typescript_files": any(p.endswith((".ts", ".tsx")) for p in files),
         "has_tsx_files": bool(tsx_files),
+        "has_javascript_or_typescript_files": bool(js_ts_files),
+        "has_package_manifest": any(Path(path).name == "package.json" for path in manifests),
+        "has_node_ai_dependency": bool(NODE_AI_DEPENDENCIES & deps),
+        "has_python_files": bool(python_files),
+        "has_python_manifest": bool(python_manifest_paths),
+        "has_python_ai_data_dependency": bool(PYTHON_AI_DATA_DEPENDENCIES & lower_deps),
         "has_tailwind": "tailwindcss" in deps or any("tailwind.config" in p for p in files),
         "has_radix": any(dep.startswith("@radix-ui/") for dep in deps),
         "has_shadcn_components": "components.json" in files or any("/ui/" in p for p in files),
@@ -219,10 +386,13 @@ def build_repository_card(snapshot_root: Path) -> dict[str, Any]:
     deterministic_features = {
         "source_file_count": len(source_files),
         "usable_source_file_count": len(usable_source_files),
+        "js_ts_source_file_count": len(js_ts_files),
+        "python_source_file_count": len(python_files),
         "tsx_file_count": len(tsx_files),
         "generated_vendor_file_count": len(generated_vendor_files),
         "lockfile_count": len(lockfiles),
         "package_manifest_count": len(manifests),
+        "python_manifest_count": len(python_manifest_paths),
         "top_level_files": [p for p in files if "/" not in p][:40],
     }
     return {
@@ -263,6 +433,32 @@ def _passes_ui_gates(metadata: dict[str, Any], card: dict[str, Any]) -> tuple[bo
     has_next_tsx = signals["has_next_dependency"] and signals["has_tsx_files"]
     if not (has_react_ts or has_next_tsx):
         return False, "no React/TypeScript UI stack evidence"
+    return True, "qualified"
+
+
+def _passes_reuse_gates(metadata: dict[str, Any], card: dict[str, Any]) -> tuple[bool, str]:
+    ok, reason = _passes_metadata_gates(metadata)
+    if not ok:
+        return ok, reason
+
+    ok, reason = _passes_snapshot_content_gates(card)
+    if not ok:
+        return ok, reason
+
+    signals = card["stack_signals"]
+    has_react_ts = signals.get("has_react_dependency") and signals.get("has_typescript_files")
+    has_next_tsx = signals.get("has_next_dependency") and signals.get("has_tsx_files")
+    has_node_source = signals.get("has_package_manifest") and signals.get(
+        "has_javascript_or_typescript_files",
+    )
+    has_node_ai = signals.get("has_node_ai_dependency") and signals.get(
+        "has_javascript_or_typescript_files",
+    )
+    has_python_reuse_source = signals.get("has_python_files") and (
+        signals.get("has_python_manifest") or signals.get("has_python_ai_data_dependency")
+    )
+    if not (has_react_ts or has_next_tsx or has_node_source or has_node_ai or has_python_reuse_source):
+        return False, "no reusable TS/JS/Python stack evidence"
     return True, "qualified"
 
 
@@ -318,7 +514,7 @@ async def qualify(limit: int) -> dict[str, int]:
                 default_branch=default_branch,
             )
             card = build_repository_card(local_path)
-            ok, reason = _passes_ui_gates(metadata, card)
+            ok, reason = _passes_reuse_gates(metadata, card)
             if not ok:
                 skipped += 1
                 catalog.record_analysis_run(

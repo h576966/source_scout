@@ -1,19 +1,28 @@
 import json
+import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
 from . import catalog
+from .capabilities import AI_DATA_CAPABILITIES, DOMAIN_CAPABILITIES
 from .constants import SKIP_DIRS
 
-SOURCE_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js", ".css", ".mdx"}
-ENTRY_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js"}
+SOURCE_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js", ".css", ".mdx", ".py"}
+ENTRY_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js", ".py"}
 CONFIG_NAMES = {
     "package.json",
     "components.json",
+    "environment.yml",
     "tailwind.config.js",
     "tailwind.config.ts",
     "postcss.config.js",
+    "pyproject.toml",
+    "requirements.txt",
+    "requirements-dev.txt",
     "tsconfig.json",
+    "uv.lock",
+    "poetry.lock",
 }
 MAX_FILE_BYTES = 1_000_000
 
@@ -30,6 +39,7 @@ BACKEND_CAPABILITIES = {
     "validation-schemas",
     "admin-export",
 }
+AI_AND_DATA_CAPABILITIES = set(AI_DATA_CAPABILITIES)
 BACKEND_PATH_PARTS = {
     "actions",
     "api",
@@ -50,6 +60,29 @@ BACKEND_PATH_PARTS = {
     "utils",
     "worker",
     "workers",
+}
+AI_DATA_PATH_PARTS = {
+    "agents",
+    "api",
+    "benchmarks",
+    "cli",
+    "data",
+    "datasets",
+    "eval",
+    "evals",
+    "harness",
+    "ingest",
+    "llm",
+    "models",
+    "notebooks",
+    "pipeline",
+    "pipelines",
+    "rag",
+    "retrieval",
+    "scripts",
+    "services",
+    "src",
+    "tools",
 }
 NOISY_PATH_PARTS = {
     "__tests__",
@@ -117,6 +150,15 @@ CAPABILITY_PATH_HINTS: dict[str, set[str]] = {
     "background-jobs": {"worker", "job", "cron", "schedule", "sync", "queue"},
     "validation-schemas": {"validation", "schema", "schemas", "zod", "resolver"},
     "admin-export": {"export", "report", "reports", "pdf", "excel", "xlsx"},
+    "llm-harness": {"agent", "agents", "chat", "completion", "harness", "llm", "prompt"},
+    "local-ai-integration": {"llama", "llamacpp", "lmstudio", "ollama", "server", "vllm"},
+    "rag-retrieval": {"chunk", "embed", "embedding", "index", "rag", "retrieval", "vector"},
+    "eval-harness": {"benchmark", "eval", "evals", "golden", "judge", "metric", "metrics"},
+    "data-pipeline": {"data", "duckdb", "etl", "ingest", "pandas", "pipeline", "polars"},
+    "python-api": {"api", "fastapi", "router", "routes", "server", "service"},
+    "python-cli": {"cli", "command", "main", "typer", "click"},
+    "node-ai-sdk": {"ai", "api", "chat", "completion", "generate", "openai", "sdk"},
+    "model-server-integration": {"client", "completion", "lmstudio", "model", "ollama", "server"},
 }
 CAPABILITY_STRONG_CONTENT: dict[str, set[str]] = {
     "data-table": {"@tanstack/react-table", "usereacttable", "columndef", "getrowmodel"},
@@ -172,6 +214,15 @@ CAPABILITY_STRONG_CONTENT: dict[str, set[str]] = {
     "background-jobs": {"cron", "queue", "worker", "schedule", "sync"},
     "validation-schemas": {"z.object", "zod", "schema", "resolver"},
     "admin-export": {"jspdf", "xlsx", "export", "report"},
+    "llm-harness": {"chat.completions", "response_format", "structured output", "tool_calls"},
+    "local-ai-integration": {"127.0.0.1:1234", "lm studio", "lmstudio", "ollama", "llama.cpp"},
+    "rag-retrieval": {"embedding", "similarity_search", "vectorstore", "retriever", "chunk"},
+    "eval-harness": {"golden", "metric", "expected", "judge", "eval"},
+    "data-pipeline": {"duckdb", "polars", "pandas", "dataframe", "read_parquet"},
+    "python-api": {"fastapi", "apirouter", "pydantic", "basemodel"},
+    "python-cli": {"typer.app", "typer", "click.command", "argparse"},
+    "node-ai-sdk": {"streamtext", "generatetext", "@ai-sdk", "openai.chat"},
+    "model-server-integration": {"openai-compatible", "base_url", "models", "chat/completions"},
 }
 
 CAPABILITY_TERMS: dict[str, list[str]] = {
@@ -221,6 +272,22 @@ CAPABILITY_TERMS: dict[str, list[str]] = {
     "background-jobs": ["worker", "job", "cron", "schedule", "sync", "queue"],
     "validation-schemas": ["validation", "schema", "zod", "resolver"],
     "admin-export": ["export", "report", "pdf", "excel", "xlsx"],
+    "llm-harness": ["llm", "harness", "agent", "prompt", "structured output", "tool calling"],
+    "local-ai-integration": ["local ai", "lm studio", "lmstudio", "ollama", "llama.cpp", "vllm"],
+    "rag-retrieval": ["rag", "retrieval", "embedding", "vector", "semantic search", "chunk"],
+    "eval-harness": ["eval", "evaluation", "benchmark", "golden", "judge", "metrics"],
+    "data-pipeline": ["data pipeline", "duckdb", "polars", "pandas", "etl", "ingest"],
+    "python-api": ["fastapi", "pydantic", "api", "route", "server"],
+    "python-cli": ["typer", "click", "cli", "command", "argparse"],
+    "node-ai-sdk": ["ai sdk", "@ai-sdk", "openai", "anthropic", "streaming", "chat"],
+    "model-server-integration": [
+        "model server",
+        "openai compatible",
+        "lm studio",
+        "lmstudio",
+        "ollama",
+        "base_url",
+    ],
 }
 
 RELEVANT_DEPENDENCIES = {
@@ -263,6 +330,31 @@ RELEVANT_DEPENDENCIES = {
     "tailwindcss",
     "xlsx",
     "zod",
+    "@ai-sdk/anthropic",
+    "@ai-sdk/openai",
+    "@ai-sdk/react",
+    "@langchain/core",
+    "ai",
+    "anthropic",
+    "chromadb",
+    "click",
+    "duckdb",
+    "fastapi",
+    "gradio",
+    "instructor",
+    "langchain",
+    "litellm",
+    "llama-index",
+    "openai",
+    "pandas",
+    "polars",
+    "pydantic",
+    "pytest",
+    "qdrant-client",
+    "sentence-transformers",
+    "streamlit",
+    "transformers",
+    "typer",
 }
 
 
@@ -332,11 +424,14 @@ def _noise_penalty(rel_path: str, capability: str) -> float:
     noisy_parts = NOISY_PATH_PARTS
     if capability in BACKEND_CAPABILITIES:
         noisy_parts = noisy_parts - BACKEND_PATH_PARTS - {"schema", "schemas"}
+    if capability in AI_AND_DATA_CAPABILITIES:
+        noisy_parts = noisy_parts - AI_DATA_PATH_PARTS - {"test", "tests"}
     if parts & noisy_parts:
         penalty += 0.5
     if stem in NOISY_FILE_STEMS and capability not in BACKEND_CAPABILITIES:
         penalty += 0.35
-    if rel_path.endswith((".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")):
+    test_suffixes = (".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", "_test.py", "test.py")
+    if rel_path.endswith(test_suffixes) and capability != "eval-harness":
         penalty += 0.4
     return min(1.0, penalty)
 
@@ -350,9 +445,13 @@ def _ui_path_score(rel_path: str, capability: str) -> float:
     score = 0.2
     if suffix in {".tsx", ".jsx"}:
         score += 0.35
+    if suffix == ".py":
+        score += 0.18
     if parts & UI_PATH_PARTS:
         score += 0.25
     if capability in BACKEND_CAPABILITIES and parts & BACKEND_PATH_PARTS:
+        score += 0.25
+    if capability in AI_AND_DATA_CAPABILITIES and parts & AI_DATA_PATH_PARTS:
         score += 0.25
     if _capability_path_signal(rel_path, capability):
         score += 0.25
@@ -419,7 +518,63 @@ def _load_package_dependencies(snapshot_root: Path) -> tuple[dict[str, str], lis
             if isinstance(section_values, dict):
                 for name, version in section_values.items():
                     dependencies[str(name)] = str(version)
+    for manifest in snapshot_root.rglob("pyproject.toml"):
+        if any(part in SKIP_DIRS for part in manifest.parts):
+            continue
+        content = read_text(manifest)
+        if not content:
+            continue
+        try:
+            parsed = tomllib.loads(content)
+        except tomllib.TOMLDecodeError:
+            continue
+        manifests.append(_relative(snapshot_root, manifest))
+        project = parsed.get("project", {}) if isinstance(parsed, dict) else {}
+        if isinstance(project, dict):
+            for raw in project.get("dependencies", []):
+                name = _normalize_python_dependency(str(raw))
+                if name:
+                    dependencies[name] = ""
+            optional = project.get("optional-dependencies", {})
+            if isinstance(optional, dict):
+                for values in optional.values():
+                    if isinstance(values, list):
+                        for raw in values:
+                            name = _normalize_python_dependency(str(raw))
+                            if name:
+                                dependencies[name] = ""
+        tool = parsed.get("tool", {}) if isinstance(parsed, dict) else {}
+        poetry = tool.get("poetry", {}) if isinstance(tool, dict) else {}
+        if isinstance(poetry, dict):
+            for section in ("dependencies", "dev-dependencies"):
+                values = poetry.get(section, {})
+                if isinstance(values, dict):
+                    for raw in values:
+                        name = _normalize_python_dependency(str(raw))
+                        if name and name != "python":
+                            dependencies[name] = ""
+    for manifest_name in ("requirements.txt", "requirements-dev.txt"):
+        for manifest in snapshot_root.rglob(manifest_name):
+            if any(part in SKIP_DIRS for part in manifest.parts):
+                continue
+            content = read_text(manifest)
+            if not content:
+                continue
+            manifests.append(_relative(snapshot_root, manifest))
+            for line in content.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith(("#", "-")):
+                    continue
+                name = _normalize_python_dependency(stripped)
+                if name:
+                    dependencies[name] = ""
     return dependencies, manifests
+
+
+def _normalize_python_dependency(raw: str) -> str:
+    value = raw.strip().split(";", 1)[0].strip()
+    value = re.split(r"[<>=~! \[]", value, maxsplit=1)[0]
+    return value.strip().lower().replace("_", "-")
 
 
 def _dependency_paths(snapshot_root: Path, manifest_paths: list[str]) -> list[str]:
@@ -515,6 +670,14 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         adaptation_notes.append(
             "Replace source alias imports such as '@/...' with the target project's path aliases."
         )
+    if normalized in AI_AND_DATA_CAPABILITIES:
+        adaptation_notes.append(
+            "Review environment variables, model IDs, and data paths before adapting this source."
+        )
+    if any(dep in relevant_dependencies for dep in ("fastapi", "pydantic", "typer", "duckdb")):
+        adaptation_notes.append(
+            "Carry over the Python package manifest and any settings models used by the cited files."
+        )
 
     dependency_bonus = min(0.2, len(relevant_dependencies) * 0.025)
     if normalized == "data-table" and "@tanstack/react-table" in relevant_dependencies:
@@ -581,3 +744,25 @@ def run_evidence(capability: str, limit: int) -> dict[str, int]:
         {"capability": normalized, "stored": stored, "skipped": skipped},
     )
     return {"stored_assets": stored, "skipped_snapshots": skipped}
+
+
+def run_evidence_domain(domain: str, limit: int) -> dict[str, Any]:
+    capabilities = DOMAIN_CAPABILITIES.get(domain)
+    if not capabilities:
+        supported = ", ".join(sorted(DOMAIN_CAPABILITIES))
+        raise ValueError(f"Unsupported evidence domain '{domain}'. Supported domains: {supported}.")
+
+    results: dict[str, dict[str, int]] = {}
+    total_stored = 0
+    total_skipped = 0
+    for capability in capabilities:
+        result = run_evidence(capability, limit)
+        results[capability] = result
+        total_stored += int(result["stored_assets"])
+        total_skipped += int(result["skipped_snapshots"])
+    return {
+        "domain": domain,
+        "capabilities": results,
+        "stored_assets": total_stored,
+        "skipped_snapshots": total_skipped,
+    }

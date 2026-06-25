@@ -1,7 +1,7 @@
 # Source Scout
 
-Local-first MCP server and CLI for finding reusable Next.js / React / TypeScript
-UI code in public GitHub repositories.
+Local-first MCP server and CLI for finding reusable TypeScript, JavaScript,
+Python, AI/data, Next.js, Node, and React source in public GitHub repositories.
 
 The current direction is a **catalog-first reuse layer**, not generic GitHub
 search. The system scouts candidate repositories, stores reproducible local
@@ -32,15 +32,21 @@ $env:SOURCE_SCOUT_LMSTUDIO_TIMEOUT = "120"
 ## Catalog Workflow
 
 ```powershell
-source-scout scout --domain nextjs-ui --limit 500
+source-scout scout --domain personal-code --limit 500
 source-scout qualify --limit 100
 source-scout lmstudio-status --smoke-test
 source-scout profile --limit 30
-source-scout evidence --capability data-table --limit 30
+source-scout evidence --domain personal-code --limit 100
 source-scout assess --candidate-id <asset_id> --task "Find a reusable route handler"
 source-scout eval --suite ui-reuse --top-k 5
 source-scout serve-mcp
 ```
+
+`personal-code` is the default discovery domain. It is intentionally opinionated
+for personal TS/JS/Python work: AI/local-AI harnesses, data pipelines, Next.js,
+Node services, React UI, RAG/retrieval, eval harnesses, Python APIs, and Python
+CLI tools. The older `nextjs-ui` domain remains available for focused UI-only
+catalog runs.
 
 ## Task-Specific Assessment
 
@@ -320,7 +326,9 @@ src/source_scout/
 
 ## Constraints
 
-- First domain is Next.js / React / TypeScript UI reuse.
+- Default discovery domain is the opinionated `personal-code` set for TS/JS,
+  Python, AI/data, Next.js, Node, and React reuse. `nextjs-ui` remains available
+  as a focused compatibility domain.
 - Scout/qualify only accepts fresh repositories: created within 730 days,
   pushed within 180 days, public, not archived, not forks, not templates, not
   mirrors, and under the local size cap.

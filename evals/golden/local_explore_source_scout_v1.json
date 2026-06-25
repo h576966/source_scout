@@ -205,8 +205,8 @@
       "expected_citations": [
         {
           "path": "src/source_scout/catalog.py",
-          "start_line": 881,
-          "end_line": 1050,
+          "start_line": 885,
+          "end_line": 1054,
           "reason": "Search filtering, scoring, freshness gates, and candidate construction live here."
         }
       ],
@@ -220,9 +220,9 @@
       "expected_citations": [
         {
           "path": "src/source_scout/pipeline.py",
-          "start_line": 41,
-          "end_line": 69,
-          "reason": "Scout query construction with GitHub search qualifiers lives here."
+          "start_line": 112,
+          "end_line": 150,
+          "reason": "Scout query construction with GitHub search qualifiers and domain routing lives here."
         },
         {
           "path": "src/source_scout/constants.py",
@@ -241,14 +241,14 @@
       "expected_citations": [
         {
           "path": "src/source_scout/pipeline.py",
-          "start_line": 124,
-          "end_line": 146,
+          "start_line": 205,
+          "end_line": 231,
           "reason": "Repository metadata qualification gates reject stale, archived, forked, template, mirror, and oversized repositories."
         },
         {
           "path": "src/source_scout/pipeline.py",
-          "start_line": 201,
-          "end_line": 287,
+          "start_line": 439,
+          "end_line": 483,
           "reason": "Snapshot content gates reject docs-only, empty, lockfile-only, and generated/vendor-heavy repositories."
         }
       ],
@@ -262,8 +262,8 @@
       "expected_citations": [
         {
           "path": "src/source_scout/evidence.py",
-          "start_line": 269,
-          "end_line": 583,
+          "start_line": 361,
+          "end_line": 762,
           "reason": "Capability normalization, path scoring, dependency loading, and asset storage live here."
         }
       ],

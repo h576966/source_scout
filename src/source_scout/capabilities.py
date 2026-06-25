@@ -22,6 +22,22 @@ BACKEND_CAPABILITIES = {
     "validation-schemas",
     "admin-export",
 }
+AI_DATA_CAPABILITIES = {
+    "llm-harness",
+    "local-ai-integration",
+    "rag-retrieval",
+    "eval-harness",
+    "data-pipeline",
+    "python-api",
+    "python-cli",
+    "node-ai-sdk",
+    "model-server-integration",
+}
+PERSONAL_CODE_CAPABILITIES = UI_CAPABILITIES | BACKEND_CAPABILITIES | AI_DATA_CAPABILITIES
+DOMAIN_CAPABILITIES = {
+    "nextjs-ui": tuple(sorted(UI_CAPABILITIES)),
+    "personal-code": tuple(sorted(PERSONAL_CODE_CAPABILITIES)),
+}
 COMMAND_PALETTE_DEPENDENCIES = {
     "@ariakit/react",
     "@base-ui/react",
@@ -75,6 +91,40 @@ BACKEND_CAPABILITY_PATH_TERMS = {
     "validation-schemas": {"schema", "schemas", "validation", "zod", "resolver"},
     "admin-export": {"export", "pdf", "report", "reports", "xlsx", "excel"},
 }
+AI_DATA_PATH_PARTS = {
+    "agents",
+    "api",
+    "benchmarks",
+    "cli",
+    "data",
+    "datasets",
+    "eval",
+    "evals",
+    "harness",
+    "ingest",
+    "llm",
+    "models",
+    "notebooks",
+    "pipelines",
+    "rag",
+    "retrieval",
+    "scripts",
+    "services",
+    "src",
+    "tools",
+}
+AI_DATA_CAPABILITY_PATH_TERMS = {
+    "llm-harness": {"agent", "agents", "chat", "completion", "harness", "llm", "prompt"},
+    "local-ai-integration": {"llama", "lmstudio", "local", "ollama", "server", "vllm"},
+    "rag-retrieval": {"chunk", "embed", "embedding", "index", "rag", "retrieval", "vector"},
+    "eval-harness": {"benchmark", "eval", "evals", "grade", "judge", "metric", "test"},
+    "data-pipeline": {"data", "duckdb", "etl", "ingest", "pandas", "pipeline", "polars"},
+    "python-api": {"api", "fastapi", "router", "routes", "server", "service"},
+    "python-cli": {"cli", "command", "main", "typer", "click"},
+    "node-ai-sdk": {"ai", "api", "chat", "completion", "generate", "openai", "sdk"},
+    "model-server-integration": {"client", "completion", "lmstudio", "model", "ollama", "server"},
+}
+CAPABILITY_PATH_TERMS = BACKEND_CAPABILITY_PATH_TERMS | AI_DATA_CAPABILITY_PATH_TERMS
 BACKGROUND_JOB_STRONG_TERMS = {
     "cron",
     "inngest",
@@ -113,4 +163,13 @@ CAPABILITY_INTENT_HINTS = {
     "background-jobs": {"background job", "background jobs", "worker", "sync", "scheduled"},
     "validation-schemas": {"validation schema", "validation schemas", "zod", "api inputs"},
     "admin-export": {"admin export", "data export", "reporting", "pdf", "excel", "reports"},
+    "llm-harness": {"llm harness", "agent harness", "prompt", "structured output", "tool calling"},
+    "local-ai-integration": {"local ai", "lm studio", "lmstudio", "ollama", "llama.cpp", "vllm"},
+    "rag-retrieval": {"rag", "retrieval", "embedding", "vector search", "semantic search"},
+    "eval-harness": {"eval", "evaluation", "benchmark", "golden", "judge", "metrics"},
+    "data-pipeline": {"data pipeline", "duckdb", "polars", "pandas", "etl", "ingest"},
+    "python-api": {"fastapi", "python api", "api server", "pydantic", "route"},
+    "python-cli": {"python cli", "typer", "click", "command line", "cli"},
+    "node-ai-sdk": {"ai sdk", "vercel ai", "openai", "anthropic", "streaming", "chat api"},
+    "model-server-integration": {"model server", "openai compatible", "lm studio", "ollama"},
 }

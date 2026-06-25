@@ -37,7 +37,7 @@ def _run_mcp(transport: str, port: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Source Scout — catalog-first local reuse layer for Next.js/React UI code."
+            "Source Scout — catalog-first local reuse layer for TS/JS/Python source."
         ),
     )
     parser.add_argument(
@@ -57,15 +57,16 @@ def main() -> None:
     check_parser = subparsers.add_parser("check", help="Run local development checks")
     check_parser.add_argument("--with-local-explore-eval", action="store_true")
 
-    scout_parser = subparsers.add_parser("scout", help="Discover raw Next.js UI candidate repositories")
-    scout_parser.add_argument("--domain", default="nextjs-ui", choices=["nextjs-ui"])
+    scout_parser = subparsers.add_parser("scout", help="Discover raw candidate repositories")
+    scout_parser.add_argument("--domain", default="personal-code", choices=["personal-code", "nextjs-ui"])
     scout_parser.add_argument("--limit", type=int, default=500)
 
     qualify_parser = subparsers.add_parser("qualify", help="Clone and qualify repositories into snapshots")
     qualify_parser.add_argument("--limit", type=int, default=100)
 
     evidence_parser = subparsers.add_parser("evidence", help="Create deterministic evidence assets")
-    evidence_parser.add_argument("--capability", required=True)
+    evidence_parser.add_argument("--capability")
+    evidence_parser.add_argument("--domain", choices=["personal-code", "nextjs-ui"])
     evidence_parser.add_argument("--limit", type=int, default=30)
 
     eval_parser = subparsers.add_parser("eval", help="Run a local golden eval suite")
@@ -195,9 +196,16 @@ def main() -> None:
         return
 
     if args.command == "evidence":
-        from .evidence import run_evidence
+        from .evidence import run_evidence, run_evidence_domain
 
-        result = run_evidence(args.capability, args.limit)
+        if args.domain and args.capability:
+            evidence_parser.error("--domain cannot be combined with --capability.")
+        if args.domain:
+            result = run_evidence_domain(args.domain, args.limit)
+        elif args.capability:
+            result = run_evidence(args.capability, args.limit)
+        else:
+            evidence_parser.error("Either --capability or --domain is required.")
         print(result)
         return
 

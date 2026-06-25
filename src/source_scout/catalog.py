@@ -10,12 +10,13 @@ from typing import Any
 import duckdb
 
 from .capabilities import (
+    AI_DATA_CAPABILITIES,
     BACKEND_CAPABILITIES,
-    BACKEND_CAPABILITY_PATH_TERMS,
     BACKEND_PATH_PARTS,
     BACKGROUND_JOB_FALSE_POSITIVE_TERMS,
     BACKGROUND_JOB_STRONG_TERMS,
     CAPABILITY_INTENT_HINTS,
+    CAPABILITY_PATH_TERMS,
     COMMAND_PALETTE_DEPENDENCIES,
     UI_CAPABILITIES,
 )
@@ -733,6 +734,9 @@ def _capability_terms(capability: str) -> set[str]:
         terms.update({"actions", "revalidatepath", "server"})
     if capability == "file-storage":
         terms.update({"blob", "drive", "multipart", "r2", "s3", "storage", "upload"})
+    for hint in CAPABILITY_INTENT_HINTS.get(capability, set()):
+        terms.add(hint.lower())
+        terms.update(hint.lower().replace("-", " ").split())
     return {term for term in terms if len(term) > 2}
 
 
@@ -834,13 +838,13 @@ def _paths_contain_any(paths: list[Any], terms: set[str]) -> bool:
 
 
 def _backend_path_alignment_score(capability: str, paths: list[Any]) -> float:
-    if capability not in BACKEND_CAPABILITIES:
+    if capability not in BACKEND_CAPABILITIES and capability not in AI_DATA_CAPABILITIES:
         return 0.0
 
     if capability == "background-jobs":
         return _background_job_path_alignment_score(paths)
 
-    wanted_terms = BACKEND_CAPABILITY_PATH_TERMS.get(capability, set())
+    wanted_terms = CAPABILITY_PATH_TERMS.get(capability, set())
     if not wanted_terms:
         return 0.0
     hits = len(_all_path_tokens(paths) & wanted_terms)
@@ -962,6 +966,12 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
             and capability != primary_intent
         ):
             score -= 0.22
+        if (
+            primary_intent in AI_DATA_CAPABILITIES
+            and best_intent_score >= 0.7
+            and capability != primary_intent
+        ):
+            score -= 0.18
         if best_intent_score >= 0.7 and capability in UI_CAPABILITIES and capability_intent_score < 0.35:
             score -= 0.18
         if capability == "data-table" and "@tanstack/react-table" not in external_dependencies:
@@ -1019,6 +1029,8 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
                 score -= 0.32
         if capability in BACKEND_CAPABILITIES and not _has_backend_path(entry_paths):
             score -= 0.28
+        if capability in AI_DATA_CAPABILITIES and path_alignment_score < 0:
+            score -= 0.08
         if gemma_profile and profile_score < 0.12:
             score -= 0.08
         if not entry_paths:

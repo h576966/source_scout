@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,37 @@ def _write_nextjs_fixture(root: Path) -> None:
     (root / "tsconfig.json").write_text("{}", encoding="utf-8")
 
 
+def _write_python_ai_fixture(root: Path) -> None:
+    (root / "src" / "assistant").mkdir(parents=True)
+    (root / "src" / "assistant" / "rag.py").write_text(
+        "\n".join(
+            [
+                "from fastapi import FastAPI",
+                "from openai import OpenAI",
+                "import duckdb",
+                "",
+                "app = FastAPI()",
+                "client = OpenAI(base_url='http://127.0.0.1:1234/v1')",
+                "",
+                "def semantic_search(query: str):",
+                "    embedding = client.embeddings.create(model='local', input=query)",
+                "    return duckdb.sql('select * from chunks').fetchall()",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (root / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "assistant-tools"',
+                'dependencies = ["fastapi", "openai", "duckdb", "pydantic", "typer"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _profile(capability_name: str, evidence_paths: list[str], confidence: float = 0.9) -> dict:
     return {
         "schema_version": "gemma-profile-v1",
@@ -84,10 +116,13 @@ def _profile(capability_name: str, evidence_paths: list[str], confidence: float 
 def test_capability_constants_cover_catalog_scoring_representatives() -> None:
     assert {"data-table", "command-palette"} <= capabilities.UI_CAPABILITIES
     assert {"route-handlers", "data-access", "background-jobs"} <= capabilities.BACKEND_CAPABILITIES
+    assert {"llm-harness", "rag-retrieval", "python-api"} <= capabilities.AI_DATA_CAPABILITIES
+    assert "personal-code" in capabilities.DOMAIN_CAPABILITIES
     assert "tanstack" in capabilities.CAPABILITY_INTENT_HINTS["data-table"]
     assert "api route" in capabilities.CAPABILITY_INTENT_HINTS["route-handlers"]
     assert {"api", "route"} <= capabilities.BACKEND_CAPABILITY_PATH_TERMS["route-handlers"]
     assert {"db", "prisma"} <= capabilities.BACKEND_CAPABILITY_PATH_TERMS["data-access"]
+    assert {"rag", "retrieval"} <= capabilities.CAPABILITY_PATH_TERMS["rag-retrieval"]
     assert {"cron", "worker"} <= capabilities.BACKGROUND_JOB_STRONG_TERMS
     assert "service-worker" in capabilities.BACKGROUND_JOB_FALSE_POSITIVE_TERMS
 
@@ -170,6 +205,23 @@ def test_repository_card_and_ui_gates(tmp_path: Path) -> None:
     assert reason == "qualified"
 
 
+def test_python_repository_card_and_reuse_gates(tmp_path: Path) -> None:
+    _write_python_ai_fixture(tmp_path)
+    card = pipeline.build_repository_card(tmp_path)
+
+    assert card["stack_signals"]["has_python_files"] is True
+    assert card["stack_signals"]["has_python_manifest"] is True
+    assert card["stack_signals"]["has_python_ai_data_dependency"] is True
+    assert card["deterministic_features"]["python_source_file_count"] == 1
+    assert card["deterministic_features"]["python_manifest_count"] == 1
+
+    metadata = _repo_metadata("owner", "python-ai", language="Python", topics=["ai"])
+    ok, reason = pipeline._passes_reuse_gates(metadata, card)
+
+    assert ok is True
+    assert reason == "qualified"
+
+
 def test_scout_queries_filter_archived_stale_large_and_old_repos() -> None:
     query = pipeline.build_nextjs_ui_queries()[0][1]
 
@@ -180,6 +232,27 @@ def test_scout_queries_filter_archived_stale_large_and_old_repos() -> None:
     assert "created:>=" in query
     assert "pushed:>=" in query
     assert f"size:<={pipeline.MAX_REPOSITORY_SIZE_KB}" in query
+
+
+def test_personal_code_queries_filter_archived_stale_large_and_old_repos() -> None:
+    queries = pipeline.build_domain_queries("personal-code")
+    joined = "\n".join(query for _, query in queries)
+
+    assert any(capability == "rag-retrieval" for capability, _ in queries)
+    assert any(capability == "node-ai-sdk" for capability, _ in queries)
+    assert "language:Python" in joined
+    assert "language:TypeScript" in joined
+    assert "archived:false" in joined
+    assert "mirror:false" in joined
+    assert "template:false" in joined
+    assert "is:public" in joined
+    assert "created:>=" in joined
+    assert "pushed:>=" in joined
+    assert f"size:<={pipeline.MAX_REPOSITORY_SIZE_KB}" in joined
+
+
+def test_nextjs_ui_domain_still_builds_compatibility_queries() -> None:
+    assert pipeline.build_domain_queries("nextjs-ui") == pipeline.build_nextjs_ui_queries()
 
 
 def test_metadata_gates_reject_stale_old_forks_templates_mirrors_and_large_repos() -> None:
@@ -283,6 +356,75 @@ def test_evidence_scan_returns_line_citations_and_dependencies(tmp_path: Path) -
     assert "@tanstack/react-table" in result["external_dependencies"]
     assert any(path.startswith("components/data-table/data-table.tsx:") for path in result["evidence_paths"])
     assert result["reuse_score"] > 0
+
+
+def test_evidence_scan_returns_python_ai_assets(tmp_path: Path) -> None:
+    _write_python_ai_fixture(tmp_path)
+
+    result = evidence.scan_snapshot(tmp_path, "rag-retrieval")
+
+    assert "src/assistant/rag.py" in result["entry_paths"]
+    assert "openai" in result["external_dependencies"]
+    assert "duckdb" in result["external_dependencies"]
+    assert "pyproject.toml" in result["dependency_paths"]
+    assert any(path.startswith("src/assistant/rag.py:") for path in result["evidence_paths"])
+    assert result["reuse_score"] > 0
+
+
+def test_run_evidence_domain_runs_every_mapped_capability(monkeypatch) -> None:
+    called: list[str] = []
+
+    def fake_run_evidence(capability: str, limit: int) -> dict[str, int]:
+        called.append(f"{capability}:{limit}")
+        return {"stored_assets": 1, "skipped_snapshots": 2}
+
+    monkeypatch.setattr(evidence, "run_evidence", fake_run_evidence)
+
+    result = evidence.run_evidence_domain("personal-code", 7)
+
+    expected = list(capabilities.DOMAIN_CAPABILITIES["personal-code"])
+    assert called == [f"{capability}:7" for capability in expected]
+    assert result["stored_assets"] == len(expected)
+    assert result["skipped_snapshots"] == len(expected) * 2
+
+
+def test_evidence_cli_runs_domain(monkeypatch, capsys) -> None:
+    import source_scout.__main__ as main_module
+
+    def fake_run_evidence_domain(domain: str, limit: int) -> dict[str, object]:
+        return {"domain": domain, "stored_assets": limit, "skipped_snapshots": 0}
+
+    monkeypatch.setattr(evidence, "run_evidence_domain", fake_run_evidence_domain)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["source-scout", "evidence", "--domain", "personal-code", "--limit", "9"],
+    )
+
+    main_module.main()
+
+    captured = capsys.readouterr()
+    assert "'domain': 'personal-code'" in captured.out
+    assert "'stored_assets': 9" in captured.out
+
+
+def test_scout_cli_defaults_to_personal_code(monkeypatch, capsys) -> None:
+    import source_scout.__main__ as main_module
+    from source_scout import pipeline as pipeline_module
+
+    async def fake_scout(domain: str, limit: int) -> dict[str, int]:
+        assert domain == "personal-code"
+        assert limit == 5
+        return {"stored_repositories": 5}
+
+    monkeypatch.setattr(main_module, "_require_github_token", lambda: None)
+    monkeypatch.setattr(pipeline_module, "scout", fake_scout)
+    monkeypatch.setattr(sys, "argv", ["source-scout", "scout", "--limit", "5"])
+
+    main_module.main()
+
+    captured = capsys.readouterr()
+    assert "'stored_repositories': 5" in captured.out
 
 
 def test_evidence_scan_prefers_ui_component_over_schema_noise(tmp_path: Path) -> None:

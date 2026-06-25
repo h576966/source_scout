@@ -142,7 +142,7 @@ async def find_reusable_code(
     next_steps = []
     if not results:
         next_steps.append(
-            "Run source-scout scout --domain nextjs-ui, qualify, then evidence for the desired capability."
+            "Run source-scout scout --domain personal-code, qualify, then evidence --domain personal-code."
         )
     else:
         next_steps.append(

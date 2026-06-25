@@ -10,9 +10,10 @@ This document is a short product orientation. Scope boundaries live in
 
 ## Product Shape
 
-Source Scout is a local-first reuse assistant for coding agents. It is not a
-generic GitHub search replacement, repo ranking site, SaaS product, or autonomous
-integration system.
+Source Scout is a local-first reuse assistant for coding agents. It is focused
+on your working stack: TypeScript, JavaScript, Python, AI/local-AI harnesses,
+data tooling, Next.js, Node, and React. It is not a generic GitHub search
+replacement, repo ranking site, SaaS product, or autonomous integration system.
 
 The useful workflow is:
 
@@ -30,7 +31,7 @@ SHA, dependencies, adaptation notes, and a task-linked bundle.
 ## Current Product Path
 
 - Build and maintain a local catalog of recent, public, commit-pinned source
-  snapshots.
+  snapshots from the opinionated `personal-code` discovery domain.
 - Extract deterministic evidence from paths, manifests, dependencies, and source
   files without executing repository code.
 - Use Gemma only to assess validated evidence for a specific task.
