@@ -8,8 +8,11 @@ search. The system scouts candidate repositories, stores reproducible local
 snapshots by commit SHA, extracts deterministic file-level evidence, and exposes
 small source bundles to coding agents.
 
-See `docs/source-scout-direction.md` for the current product direction and
+See `docs/source_scout_direction.md` for the current product direction and
 `docs/complexity-budget.md` for scope boundaries and model role rules.
+
+The installed CLI exposes both `source-scout` and `source_scout`; examples use
+`source-scout`. The Python module/package remains `source_scout`.
 
 ## Prerequisites
 
@@ -255,7 +258,7 @@ Optional LM Studio MCP config:
 ```json
 {
   "mcpServers": {
-    "source-scout": {
+    "source_scout": {
       "command": "<repo-root>\\.venv\\Scripts\\python.exe",
       "args": ["-m", "source_scout", "serve-mcp"],
       "env": {

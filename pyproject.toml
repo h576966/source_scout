@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 source-scout = "source_scout.__main__:main"
+source_scout = "source_scout.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

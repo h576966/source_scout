@@ -9,14 +9,6 @@ from source_scout import catalog, fastcontext, server
 from source_scout.models import LocalExploreResult
 
 
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
-
-
 @pytest.mark.asyncio
 async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, tmp_path: Path) -> None:
     async def fake_explore_local_project(

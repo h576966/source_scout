@@ -10,14 +10,6 @@ import pytest
 from source_scout import assessment_rules, assessor, catalog, evidence_ledger, fastcontext, lmstudio, pipeline
 
 
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
-
-
 def _write_fixture(root: Path, *, with_evidence_file: bool = True) -> None:
     if with_evidence_file:
         (root / "src" / "app" / "api").mkdir(parents=True)
@@ -87,7 +79,7 @@ def _candidate(
     snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
     card = pipeline.build_repository_card(snapshot_root)
     card["gemma_profile"] = {
-        "schema_version": "gemma-profile-v1",
+        "schema_version": "gemma-profile-v2",
         "repository_type": "reference_application",
         "capabilities": [{"name": "route-handlers", "confidence": 0.8, "evidence": ["src/app/api/route.ts"]}],
         "likely_usefulness": 0.8,
@@ -156,12 +148,18 @@ def _valid_response(evidence_id: str, **overrides: Any) -> dict[str, Any]:
 
 
 def _allowed_ids(messages: list[dict[str, Any]]) -> list[str]:
+    payload = _prompt_payload_from_messages(messages)
+    return [str(value) for value in payload["allowed_evidence_ids"]]
+
+
+def _prompt_payload_from_messages(messages: list[dict[str, Any]]) -> dict[str, Any]:
     content = str(messages[1]["content"])
     marker = "Context JSON:\n"
     start = content.index(marker) + len(marker)
     end = content.index("\n\nReturn exactly", start)
-    payload = json.loads(content[start:end])
-    return [str(value) for value in payload["allowed_evidence_ids"]]
+    parsed = json.loads(content[start:end])
+    assert isinstance(parsed, dict)
+    return parsed
 
 
 def _missing_fastcontext(priority: str = "high") -> list[dict[str, str]]:
@@ -185,6 +183,12 @@ async def test_assess_candidate_normalizes_valid_response_and_records_analysis(
 
     async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
         assert kwargs["response_format"] == assessor.ASSESSMENT_RESPONSE_FORMAT
+        assert _allowed_ids(kwargs["messages"]) == ["E1"]
+        schema = kwargs["response_format"]["json_schema"]["schema"]
+        requirement_items = schema["properties"]["requirement_assessments"]["items"]
+        assert requirement_items["required"] == ["requirement", "status", "evidence_ids"]
+        payload = _prompt_payload_from_messages(kwargs["messages"])
+        assert "stable_evidence_id" not in payload["evidence_ledger"][0]
         return _valid_response(evidence_id)
 
     monkeypatch.setattr(assessor.lmstudio, "chat_json", fake_chat_json)
@@ -199,7 +203,9 @@ async def test_assess_candidate_normalizes_valid_response_and_records_analysis(
     assert result.requirements[0].evidence_paths == ["src/app/api/route.ts:1-4"]
     assert result.reasons[0].reason == "Route handler is compact."
     assert result.adaptation_steps[0].source_paths == ["src/app/api/route.ts"]
+    assert evidence_id == "E1"
     assert result.evidence_ledger[0]["evidence_id"] == evidence_id
+    assert result.evidence_ledger[0]["stable_evidence_id"].startswith("E_")
     assert result.license_status == assessment_rules.LICENSE_PERMISSIVE_DETECTED
     runs = catalog.get_connection().execute(
         "SELECT stage_name, status, model_id FROM analysis_runs WHERE stage_name = 'reuse-assess'"
@@ -1048,7 +1054,7 @@ def test_assess_cli_prints_compact_json(
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "assess",
             "--candidate-id",
             "asset-1",
@@ -1078,7 +1084,7 @@ def test_assess_cli_validates_round_limit(
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "assess",
             "--candidate-id",
             "asset-1",
@@ -1097,7 +1103,18 @@ def test_assess_cli_validates_round_limit(
 
 
 def test_no_stale_repo_finder_naming() -> None:
-    stale_terms = ["repo" + "_finder", "REPO" + "_FINDER", "repo" + "-finder", "." + "repo_finder"]
+    stale_terms = [
+        "repo" + "_finder",
+        "REPO" + "_FINDER",
+        "repo" + "-finder",
+        "repo" + " finder",
+        "Repo" + " Finder",
+        "Repo" + "Finder",
+        "repo" + "Finder",
+        "." + "repo_finder",
+        "/repo" + "_finder",
+        "/repo" + "-finder",
+    ]
     roots = [Path("src"), Path("tests"), Path("docs"), Path("README.md"), Path("pyproject.toml")]
     offenders: list[str] = []
     for root in roots:

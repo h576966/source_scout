@@ -1,7 +1,3 @@
-from pathlib import Path
-
-import pytest
-
 from source_scout import assessment_rules, catalog
 from source_scout.models import (
     AdaptationStep,
@@ -12,14 +8,6 @@ from source_scout.models import (
     RequirementAssessment,
     ReuseAssessmentResult,
 )
-
-
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
 
 
 def _assessment(

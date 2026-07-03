@@ -17,28 +17,6 @@ def _task_terms(task: str) -> set[str]:
     return {term for term in normalized.split() if len(term) > 2}
 
 
-def _capability_terms(capability: str) -> set[str]:
-    terms = set(capability.lower().replace("-", " ").split())
-    if capability == "data-table":
-        terms.update({"datatable", "tanstack", "columns", "grid"})
-    if capability == "command-palette":
-        terms.update({"cmdk", "command", "palette"})
-    if capability == "trpc-router":
-        terms.update({"inittrpc", "procedure", "protectedprocedure", "publicprocedure", "trpc"})
-    if capability == "data-access":
-        terms.update({"drizzle", "prisma", "database", "schema"})
-    if capability == "auth-middleware":
-        terms.update({"auth", "session", "middleware"})
-    if capability == "server-actions":
-        terms.update({"actions", "revalidatepath", "server"})
-    if capability == "file-storage":
-        terms.update({"blob", "drive", "multipart", "r2", "s3", "storage", "upload"})
-    for hint in CAPABILITY_INTENT_HINTS.get(capability, set()):
-        terms.add(hint.lower())
-        terms.update(hint.lower().replace("-", " ").split())
-    return {term for term in terms if len(term) > 2}
-
-
 def _float_value(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -46,49 +24,36 @@ def _float_value(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _profile_match_score(
-    profile: dict[str, Any] | None,
-    task_terms: set[str],
-    capability: str,
-) -> float:
+def _profile_match_score(profile: dict[str, Any] | None) -> float:
     if not profile:
         return 0.0
-
-    capability_terms = _capability_terms(capability)
-    wanted_terms = task_terms | capability_terms
-    best_capability = 0.0
-    capabilities = profile.get("capabilities", [])
-    if isinstance(capabilities, list):
-        for item in capabilities:
-            if not isinstance(item, dict):
-                continue
-            evidence = item.get("evidence", [])
-            evidence_text = " ".join(str(value) for value in evidence) if isinstance(evidence, list) else ""
-            searchable = f"{item.get('name', '')} {evidence_text}".lower().replace("-", " ")
-            capability_overlap = sum(1 for term in capability_terms if term in searchable)
-            task_overlap = sum(1 for term in wanted_terms if term in searchable)
-            if task_overlap <= 0:
-                continue
-            confidence = _float_value(item.get("confidence"))
-            if capability_overlap <= 0:
-                candidate_score = confidence * min(0.18, task_overlap * 0.05)
-            else:
-                candidate_score = confidence * (0.45 + (capability_overlap * 0.18) + (task_overlap * 0.04))
-            best_capability = max(best_capability, min(1.0, candidate_score))
 
     quality = (
         _float_value(profile.get("likely_usefulness"))
         + _float_value(profile.get("extractability"))
         + _float_value(profile.get("maintenance_quality"))
     ) / 3
+    if quality <= 0 and not profile.get("concerns"):
+        return 0.0
     concerns = " ".join(str(value).lower() for value in profile.get("concerns", []))
     concern_penalty = 0.08 if any(term in concerns for term in ("coupled", "low quality", "unclear")) else 0.0
-    quality_weight = 0.22 if best_capability >= 0.25 else 0.1
-    combined = (best_capability * (1 - quality_weight)) + (quality * quality_weight) - concern_penalty
+    combined = (quality * 0.35) - concern_penalty
     return round(
         max(0.0, min(1.0, combined)),
         4,
     )
+
+
+def _has_profile_signal(profile: dict[str, Any] | None) -> bool:
+    if not profile:
+        return False
+    if any(
+        _float_value(profile.get(key)) > 0
+        for key in ("likely_usefulness", "extractability", "maintenance_quality")
+    ):
+        return True
+    concerns = profile.get("concerns", [])
+    return isinstance(concerns, list) and any(str(value).strip() for value in concerns)
 
 
 def _synthesis_score(synthesis: dict[str, Any], key: str) -> float:

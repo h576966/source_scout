@@ -4,9 +4,7 @@ from pathlib import Path
 import pytest
 
 from source_scout import cli_status, fastcontext, lmstudio
-from tests.fastcontext_helpers import isolated_catalog
 
-pytestmark = pytest.mark.usefixtures(isolated_catalog.__name__)
 
 def test_fastcontext_status_cli_prints_json(monkeypatch, capsys) -> None:
     import source_scout.__main__ as main_module
@@ -30,7 +28,7 @@ def test_fastcontext_status_cli_prints_json(monkeypatch, capsys) -> None:
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "fastcontext-status",
             "--start-server",
             "--smoke-test",
@@ -196,7 +194,7 @@ def test_refine_evidence_cli_invokes_fastcontext(monkeypatch, capsys) -> None:
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "refine-evidence",
             "--candidate-id",
             "abc",
@@ -243,7 +241,7 @@ def test_refine_evidence_cli_invokes_suite_batch(monkeypatch, capsys, tmp_path: 
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "refine-evidence",
             "--suite",
             "ui-reuse",
@@ -296,7 +294,7 @@ def test_explore_local_cli_invokes_fastcontext(monkeypatch, capsys, tmp_path: Pa
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "explore-local",
             "--task",
             "Find MCP tools",

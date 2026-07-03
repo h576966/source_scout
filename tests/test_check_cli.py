@@ -25,7 +25,7 @@ def test_check_cli_runs_default_commands(
         return _completed(command)
 
     monkeypatch.setattr(cli_checks.subprocess, "run", fake_run)
-    monkeypatch.setattr(sys, "argv", ["source-scout", "check"])
+    monkeypatch.setattr(sys, "argv", ["source_scout", "check"])
 
     main_module.main()
 
@@ -51,7 +51,7 @@ def test_check_cli_local_explore_flag_appends_eval(
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "check",
             "--with-local-explore-eval",
         ],
@@ -100,7 +100,7 @@ def test_check_cli_exits_on_first_failure(
         return _completed(command, returncode=7 if len(calls) == 2 else 0)
 
     monkeypatch.setattr(cli_checks.subprocess, "run", fake_run)
-    monkeypatch.setattr(sys, "argv", ["source-scout", "check"])
+    monkeypatch.setattr(sys, "argv", ["source_scout", "check"])
 
     with pytest.raises(SystemExit) as exc:
         main_module.main()

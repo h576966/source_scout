@@ -76,7 +76,14 @@ def test_repo_map_discovers_ts_exports_next_routes_manifests_and_evals(tmp_path:
         encoding="utf-8",
     )
     (root / "pyproject.toml").write_text(
-        "[project.scripts]\nsource-scout = 'source_scout.__main__:main'\n",
+        "\n".join(
+            [
+                "[project.scripts]",
+                "source-scout = 'source_scout.__main__:main'",
+                "source_scout = 'source_scout.__main__:main'",
+            ]
+        )
+        + "\n",
         encoding="utf-8",
     )
     (root / "setup.cfg").write_text(
@@ -104,6 +111,7 @@ def test_repo_map_discovers_ts_exports_next_routes_manifests_and_evals(tmp_path:
     assert any(entry.name == "ChatPanel" for entry in repo_map.symbols)
     assert any(entry.name == "test" for entry in repo_map.cli_entrypoints)
     assert any(entry.name == "source-scout" for entry in repo_map.cli_entrypoints)
+    assert any(entry.name == "source_scout" for entry in repo_map.cli_entrypoints)
     assert any(entry.name == "scout-check" for entry in repo_map.cli_entrypoints)
     assert any(entry.name == "scout-profile" for entry in repo_map.cli_entrypoints)
     assert any(entry.name == "streaming_route" for entry in repo_map.eval_suites)

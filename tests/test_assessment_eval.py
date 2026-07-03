@@ -6,15 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from source_scout import assessment_eval, catalog
-
-
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
+from source_scout import assessment_eval
 
 
 def test_assessment_smoke_suite_loads_by_alias() -> None:
@@ -83,7 +75,7 @@ def test_eval_assess_cli_prints_summary(monkeypatch: pytest.MonkeyPatch, capsys,
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "eval-assess",
             "--suite",
             "assessment-smoke",

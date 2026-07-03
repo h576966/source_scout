@@ -4,15 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from source_scout import bundles, capabilities, catalog, evidence, pipeline
-
-
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
+from source_scout import bundles, capabilities, catalog, catalog_scoring, evidence, pipeline
 
 
 def _repo_metadata(owner: str, name: str, **overrides) -> dict:
@@ -100,7 +92,7 @@ def _write_python_ai_fixture(root: Path) -> None:
 
 def _profile(capability_name: str, evidence_paths: list[str], confidence: float = 0.9) -> dict:
     return {
-        "schema_version": "gemma-profile-v1",
+        "schema_version": "gemma-profile-v2",
         "repository_type": "reference_application",
         "capabilities": [
             {"name": capability_name, "confidence": confidence, "evidence": evidence_paths}
@@ -108,6 +100,19 @@ def _profile(capability_name: str, evidence_paths: list[str], confidence: float 
         "likely_usefulness": 0.8,
         "extractability": 0.8,
         "maintenance_quality": 0.7,
+        "needs_fastcontext": True,
+        "concerns": [],
+    }
+
+
+def _all_zero_profile() -> dict:
+    return {
+        "schema_version": "gemma-profile-v2",
+        "repository_type": "examples",
+        "capabilities": [],
+        "likely_usefulness": 0,
+        "extractability": 0,
+        "maintenance_quality": 0,
         "needs_fastcontext": True,
         "concerns": [],
     }
@@ -125,6 +130,50 @@ def test_capability_constants_cover_catalog_scoring_representatives() -> None:
     assert {"rag", "retrieval"} <= capabilities.CAPABILITY_PATH_TERMS["rag-retrieval"]
     assert {"cron", "worker"} <= capabilities.BACKGROUND_JOB_STRONG_TERMS
     assert "service-worker" in capabilities.BACKGROUND_JOB_FALSE_POSITIVE_TERMS
+
+
+def test_profile_match_score_ignores_free_form_capability_labels() -> None:
+    profile = _profile(
+        "Perfect TanStack data table with command palette",
+        ["components/data-table.tsx"],
+        confidence=1.0,
+    )
+    labeled_score = catalog_scoring._profile_match_score(profile)
+    profile["capabilities"] = []
+    quality_only_score = catalog_scoring._profile_match_score(profile)
+
+    assert labeled_score == quality_only_score
+    assert 0 < quality_only_score < 0.35
+
+
+def test_search_assets_treats_all_zero_empty_profile_as_absent(tmp_path: Path) -> None:
+    def store_asset(owner: str, profile: dict | None) -> str:
+        root = tmp_path / owner
+        root.mkdir()
+        _write_nextjs_fixture(root)
+        repo_id = catalog.upsert_repository(
+            _repo_metadata(owner, "repo", topics=["nextjs", "table"]),
+            "test",
+        )
+        snapshot_id = catalog.upsert_snapshot(repo_id, f"{owner}sha", "main", root)
+        card = pipeline.build_repository_card(root)
+        if profile is not None:
+            card["gemma_profile"] = profile
+        catalog.upsert_repository_card(snapshot_id, card)
+        return catalog.upsert_asset(
+            snapshot_id,
+            repo_id,
+            "data-table",
+            evidence.scan_snapshot(root, "data-table"),
+        )
+
+    no_profile_asset_id = store_asset("without-profile", None)
+    empty_profile_asset_id = store_asset("empty-profile", _all_zero_profile())
+
+    results = catalog.search_assets("Find a reusable data table", max_repos=5)
+    scores = {result.candidate_id: result.score for result in results}
+
+    assert scores[empty_profile_asset_id] == scores[no_profile_asset_id]
 
 
 def test_catalog_schema_and_paths() -> None:
@@ -408,7 +457,7 @@ def test_evidence_cli_runs_domain(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["source-scout", "evidence", "--domain", "personal-code", "--limit", "9"],
+        ["source_scout", "evidence", "--domain", "personal-code", "--limit", "9"],
     )
 
     main_module.main()
@@ -429,7 +478,7 @@ def test_scout_cli_defaults_to_personal_code(monkeypatch, capsys) -> None:
 
     monkeypatch.setattr(main_module, "_require_github_token", lambda: None)
     monkeypatch.setattr(pipeline_module, "scout", fake_scout)
-    monkeypatch.setattr(sys, "argv", ["source-scout", "scout", "--limit", "5"])
+    monkeypatch.setattr(sys, "argv", ["source_scout", "scout", "--limit", "5"])
 
     main_module.main()
 

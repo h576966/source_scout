@@ -17,9 +17,13 @@ from .models import (
     ReuseAssessmentResult,
 )
 
-PROMPT_VERSION = "gemma-reuse-assessor-v1"
-SCHEMA_VERSION = "reuse-assessment-v1"
-ANALYZER_VERSION = "gemma-reuse-assessor-v1"
+PROMPT_VERSION = "gemma-reuse-assessor-v2"
+SCHEMA_VERSION = "reuse-assessment-v2"
+ANALYZER_VERSION = "gemma-reuse-assessor-v2"
+_EVIDENCE_IDS_SCHEMA = {
+    "type": "array",
+    "items": {"type": "string"},
+}
 ASSESSMENT_RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {
@@ -50,12 +54,107 @@ ASSESSMENT_RESPONSE_FORMAT = {
                     ],
                     "additionalProperties": True,
                 },
-                "requirement_assessments": {"type": "array"},
-                "fit_reasons": {"type": "array"},
-                "adaptation_plan": {"type": "array"},
-                "coupling_risks": {"type": "array"},
-                "blockers": {"type": "array"},
-                "missing_evidence": {"type": "array"},
+                "requirement_assessments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "requirement": {"type": "string"},
+                            "status": {
+                                "type": "string",
+                                "enum": ["satisfied", "partial", "unsatisfied", "unknown"],
+                            },
+                            "evidence_ids": _EVIDENCE_IDS_SCHEMA,
+                        },
+                        "required": ["requirement", "status", "evidence_ids"],
+                        "additionalProperties": True,
+                    },
+                },
+                "fit_reasons": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string"},
+                            "evidence_ids": _EVIDENCE_IDS_SCHEMA,
+                        },
+                        "required": ["text", "evidence_ids"],
+                        "additionalProperties": True,
+                    },
+                },
+                "adaptation_plan": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "step": {"type": "string"},
+                            "evidence_ids": _EVIDENCE_IDS_SCHEMA,
+                        },
+                        "required": ["step", "evidence_ids"],
+                        "additionalProperties": True,
+                    },
+                },
+                "coupling_risks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "risk": {"type": "string"},
+                            "severity": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high"],
+                            },
+                            "evidence_ids": _EVIDENCE_IDS_SCHEMA,
+                        },
+                        "required": ["risk", "severity", "evidence_ids"],
+                        "additionalProperties": True,
+                    },
+                },
+                "blockers": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "license",
+                                    "missing_functionality",
+                                    "unsupported_stack",
+                                    "excessive_coupling",
+                                    "other",
+                                ],
+                            },
+                            "severity": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high"],
+                            },
+                            "text": {"type": "string"},
+                            "evidence_ids": _EVIDENCE_IDS_SCHEMA,
+                        },
+                        "required": ["type", "severity", "text", "evidence_ids"],
+                        "additionalProperties": True,
+                    },
+                },
+                "missing_evidence": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "question": {"type": "string"},
+                            "preferred_retriever": {
+                                "type": "string",
+                                "enum": ["deterministic", "fastcontext"],
+                            },
+                            "priority": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high"],
+                            },
+                        },
+                        "required": ["question", "preferred_retriever", "priority"],
+                        "additionalProperties": True,
+                    },
+                },
                 "needs_fastcontext": {"type": "boolean"},
             },
             "required": [
@@ -594,12 +693,12 @@ def _assessment_messages(context: Mapping[str, Any]) -> list[dict[str, str]]:
                 "  },\n"
                 '  "requirement_assessments": [\n'
                 '    {"requirement": "string", "status": "satisfied|partial|unsatisfied|unknown", '
-                '"evidence_ids": ["E_<hash>"]}\n'
+                '"evidence_ids": ["E1"]}\n'
                 "  ],\n"
-                '  "fit_reasons": [{"text": "string", "evidence_ids": ["E_<hash>"]}],\n'
-                '  "adaptation_plan": [{"step": "string", "evidence_ids": ["E_<hash>"]}],\n'
+                '  "fit_reasons": [{"text": "string", "evidence_ids": ["E1"]}],\n'
+                '  "adaptation_plan": [{"step": "string", "evidence_ids": ["E1"]}],\n'
                 '  "coupling_risks": [{"risk": "string", "severity": "low|medium|high", '
-                '"evidence_ids": ["E_<hash>"]}],\n'
+                '"evidence_ids": ["E1"]}],\n'
                 '  "blockers": [{"type": "license|missing_functionality|unsupported_stack|'
                 'excessive_coupling|other", "severity": "low|medium|high", '
                 '"text": "string", "evidence_ids": []}],\n'
@@ -629,7 +728,8 @@ def _repair_messages(
             "content": (
                 "Repair the JSON once. Return only the same schema. Validation errors:\n"
                 f"{json.dumps(list(validation_errors), sort_keys=True)}\n\n"
-                "Allowed evidence IDs:\n"
+                "Allowed evidence IDs are short prompt-local IDs only. Use exactly these values "
+                "when citing source evidence; do not invent, extend, or hash them:\n"
                 f"{json.dumps(allowed_ids, sort_keys=True)}"
             ),
         },
@@ -687,16 +787,21 @@ def _prompt_payload(
             "gemma_profile": card.get("gemma_profile"),
         },
         "source_bundle_manifest": bundle_manifest,
-        "evidence_ledger": list(evidence_items),
+        "evidence_ledger": [_prompt_evidence_item(item) for item in evidence_items],
         "allowed_evidence_ids": [str(item["evidence_id"]) for item in evidence_items],
         "instructions": {
             "no_tools": True,
             "do_not_output_score": True,
             "source_claims_require_evidence_ids": True,
             "cite_only_allowed_evidence_ids": True,
+            "cite_evidence_id_not_stable_evidence_id": True,
             "license_metadata_is_passive": True,
         },
     }
+
+
+def _prompt_evidence_item(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {str(key): value for key, value in item.items() if key != "stable_evidence_id"}
 
 
 def _persist_assessment(

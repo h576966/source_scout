@@ -5,9 +5,8 @@ import httpx
 import pytest
 
 from source_scout import catalog, fastcontext, lmstudio
-from tests.fastcontext_helpers import _payload_message_text, _write_snapshot, isolated_catalog
+from tests.fastcontext_helpers import _payload_message_text, _write_snapshot
 
-pytestmark = pytest.mark.usefixtures(isolated_catalog.__name__)
 
 @pytest.mark.asyncio
 async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path) -> None:

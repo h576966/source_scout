@@ -2,17 +2,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from source_scout import catalog
-
-
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
 
 
 def _repo_metadata(owner: str, name: str) -> dict[str, Any]:

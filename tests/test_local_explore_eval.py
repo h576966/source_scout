@@ -5,16 +5,8 @@ from typing import Any
 
 import pytest
 
-from source_scout import catalog, fastcontext, local_explore_eval
+from source_scout import fastcontext, local_explore_eval
 from source_scout.models import LocalExploreResult
-
-
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
 
 
 def _write_local_project(root: Path) -> None:
@@ -77,6 +69,12 @@ def test_tracked_local_explore_suite_loads_by_alias() -> None:
     assert suite["suite_id"] == "local-explore-source-scout"
     assert 15 <= len(suite["tasks"]) <= 25
     assert suite["tasks"][0]["expected_citations"]
+
+
+def test_tracked_local_explore_suite_keeps_underscore_alias() -> None:
+    suite = local_explore_eval.load_suite("source_scout")
+
+    assert suite["suite_id"] == "local-explore-source-scout"
 
 
 def test_tracked_ernaering_suite_loads_by_alias() -> None:
@@ -426,7 +424,7 @@ def test_eval_local_explore_cli_invokes_runner(monkeypatch, capsys, tmp_path: Pa
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "eval-local-explore",
             "--suite",
             "source-scout",

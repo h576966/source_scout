@@ -17,6 +17,7 @@ SUITE_ALIASES = {
     "ernaering": "local_explore_ernaering_v1.json",
     "local-explore-ernaering": "local_explore_ernaering_v1.json",
     "source-scout": "local_explore_source_scout_v1.json",
+    "source_scout": "local_explore_source_scout_v1.json",
     "local-explore-source-scout": "local_explore_source_scout_v1.json",
 }
 PROMPT_VERSION = fastcontext.PROMPT_VERSION

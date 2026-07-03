@@ -22,7 +22,8 @@ source bundles that make Codex faster and less wasteful.
    abstractions.
 3. Review locally after meaningful changes. Prioritize correctness, security,
    edge cases, and missing tests.
-4. Verify before done. Use `source-scout check` unless explicitly impossible.
+4. Verify before done. Use `source-scout check` or `source_scout check` unless
+   explicitly impossible.
 
 ## Review Policy
 

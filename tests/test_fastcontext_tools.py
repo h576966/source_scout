@@ -6,9 +6,8 @@ import httpx
 import pytest
 
 from source_scout import fastcontext, fastcontext_tools, lmstudio
-from tests.fastcontext_helpers import _write_snapshot, isolated_catalog
+from tests.fastcontext_helpers import _write_snapshot
 
-pytestmark = pytest.mark.usefixtures(isolated_catalog.__name__)
 
 def test_fastcontext_tools_are_sandboxed_and_read_only(tmp_path: Path) -> None:
     root = tmp_path / "snapshot"

@@ -280,7 +280,7 @@ def _repository_card(candidate: Mapping[str, Any]) -> dict[str, Any]:
         },
         "deterministic_features": {"capabilities": [capability]},
         "gemma_profile": {
-            "schema_version": "gemma-profile-v1",
+            "schema_version": "gemma-profile-v2",
             "repository_type": "reference_application",
             "capabilities": [{"name": capability, "confidence": 0.8}],
             "likely_usefulness": 0.8,

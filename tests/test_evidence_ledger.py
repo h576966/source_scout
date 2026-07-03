@@ -7,14 +7,6 @@ import pytest
 from source_scout import catalog, evidence_ledger, pipeline
 
 
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
-
-
 def _write_lines(path: Path, count: int = 10, prefix: str = "line") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -74,9 +66,12 @@ def test_ledger_materializes_deterministic_and_fastcontext_evidence_with_merged_
     assert result.items[0]["snippet"].startswith("2|alpha 2\n3|alpha 3")
     selected = "alpha 2\nalpha 3\nalpha 4"
     assert result.items[0]["content_hash"] == f"sha256:{hashlib.sha256(selected.encode()).hexdigest()}"
+    assert [item["evidence_id"] for item in result.items] == ["E1", "E2"]
     assert [item["evidence_id"] for item in result.items] == [
         item["evidence_id"] for item in reversed_result.items
     ]
+    assert result.items[0]["stable_evidence_id"].startswith("E_")
+    assert result.items[0]["stable_evidence_id"] == reversed_result.items[0]["stable_evidence_id"]
 
 
 def test_ledger_normalizes_workspace_prefixed_absolute_and_windows_paths(tmp_path: Path) -> None:

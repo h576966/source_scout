@@ -37,7 +37,7 @@ def _run_mcp(transport: str, port: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Source Scout — catalog-first local reuse layer for TS/JS/Python source."
+            "Source Scout - catalog-first local reuse layer for TS/JS/Python source."
         ),
     )
     parser.add_argument(

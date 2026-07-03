@@ -5,9 +5,8 @@ import httpx
 import pytest
 
 from source_scout import fastcontext, lmstudio
-from tests.fastcontext_helpers import _write_budget_snapshot, _write_snapshot, isolated_catalog
+from tests.fastcontext_helpers import _write_budget_snapshot, _write_snapshot
 
-pytestmark = pytest.mark.usefixtures(isolated_catalog.__name__)
 
 @pytest.mark.asyncio
 async def test_fastcontext_tool_loop_uses_openai_tool_calls(tmp_path: Path) -> None:

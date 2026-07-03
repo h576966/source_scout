@@ -8,14 +8,6 @@ import pytest
 from source_scout import catalog, eval_runner
 
 
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
-
-
 def _suite_file(tmp_path: Path, tasks: list[dict[str, Any]]) -> Path:
     path = tmp_path / "suite.json"
     path.write_text(
@@ -240,7 +232,7 @@ def test_eval_cli_writes_report(tmp_path: Path, monkeypatch, capsys) -> None:
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "eval",
             "--suite",
             str(suite_path),

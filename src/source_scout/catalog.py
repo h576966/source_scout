@@ -20,6 +20,7 @@ from .catalog_scoring import (
     _capability_intent_scores,
     _float_value,
     _has_backend_path,
+    _has_profile_signal,
     _paths_contain_any,
     _profile_match_score,
     _synthesis_score,
@@ -534,9 +535,24 @@ def get_repository_card_for_snapshot(snapshot_id: str) -> dict[str, Any] | None:
     return data
 
 
-def list_repository_cards_for_profile(limit: int, force: bool = False) -> list[dict[str, Any]]:
+def list_repository_cards_for_profile(
+    limit: int,
+    force: bool = False,
+    profile_schema_version: str | None = None,
+) -> list[dict[str, Any]]:
     conn = get_connection()
-    where = "" if force else "WHERE c.gemma_profile IS NULL"
+    where = ""
+    params: list[Any] = [limit]
+    if not force:
+        if profile_schema_version:
+            where = """
+        WHERE c.gemma_profile IS NULL
+            OR json_extract_string(c.gemma_profile, '$.schema_version') IS NULL
+            OR json_extract_string(c.gemma_profile, '$.schema_version') != ?
+            """
+            params = [profile_schema_version, limit]
+        else:
+            where = "WHERE c.gemma_profile IS NULL"
     rows = conn.execute(
         f"""
         SELECT
@@ -559,7 +575,7 @@ def list_repository_cards_for_profile(limit: int, force: bool = False) -> list[d
         ORDER BY c.created_at DESC
         LIMIT ?
         """,
-        [limit],
+        params,
     ).fetchall()
     columns = [str(c[0]) for c in conn.description]
     cards: list[dict[str, Any]] = []
@@ -778,7 +794,8 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         ).lower()
         overlap = sum(1 for term in task_terms if term in searchable)
         capability = str(data["capability"])
-        profile_score = _profile_match_score(gemma_profile, task_terms, capability)
+        profile_has_signal = _has_profile_signal(gemma_profile)
+        profile_score = _profile_match_score(gemma_profile) if profile_has_signal else 0.0
         ui_path_score = _synthesis_score(synthesis, "ui_path_score")
         noise_penalty = _synthesis_score(synthesis, "noise_penalty")
         capability_path_score = _synthesis_score(synthesis, "capability_path_score")
@@ -912,7 +929,7 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
             score -= 0.28
         if capability in AI_DATA_CAPABILITIES and path_alignment_score < 0:
             score -= 0.08
-        if gemma_profile and profile_score < 0.12:
+        if profile_has_signal and profile_score < 0.12:
             score -= 0.08
         if not entry_paths:
             score -= 0.12

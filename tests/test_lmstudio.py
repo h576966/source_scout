@@ -9,14 +9,6 @@ import pytest
 from source_scout import catalog, lmstudio, pipeline, profiler
 
 
-@pytest.fixture(autouse=True)
-def isolated_catalog(tmp_path, monkeypatch):
-    monkeypatch.setenv("SOURCE_SCOUT_HOME", str(tmp_path / ".source_scout"))
-    catalog.reset_connection()
-    yield
-    catalog.reset_connection()
-
-
 def test_lmstudio_config_defaults(monkeypatch) -> None:
     monkeypatch.delenv("LM_STUDIO_BASE_URL", raising=False)
     monkeypatch.delenv("SOURCE_SCOUT_GEMMA_MODEL", raising=False)
@@ -485,6 +477,7 @@ async def test_profile_repository_cards_stores_gemma_profile(tmp_path, monkeypat
         }
 
     async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert kwargs["response_format"] == profiler.PROFILE_RESPONSE_FORMAT
         return {
             "repository_type": "reference_application",
             "capabilities": [{"name": "dashboard", "confidence": 0.8, "evidence": ["app/page.tsx"]}],
@@ -516,6 +509,96 @@ async def test_profile_repository_cards_stores_gemma_profile(tmp_path, monkeypat
     assert runs == [("profile", "completed", lmstudio.DEFAULT_GEMMA_MODEL)]
 
 
+@pytest.mark.asyncio
+async def test_profile_repository_cards_rejects_uninformative_profile(tmp_path, monkeypatch) -> None:
+    card_id = _create_repository_card(tmp_path)
+
+    async def fake_validate_models(config: lmstudio.LMStudioConfig) -> dict[str, Any]:
+        return {
+            "models": [config.gemma_model],
+            "gemma_available": True,
+            "fastcontext_available": False,
+        }
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "repository_type": "examples",
+            "capabilities": [],
+            "likely_usefulness": 0,
+            "extractability": 0,
+            "maintenance_quality": 0,
+            "needs_fastcontext": True,
+            "concerns": [],
+        }
+
+    monkeypatch.setattr(profiler.lmstudio, "validate_models", fake_validate_models)
+    monkeypatch.setattr(profiler.lmstudio, "chat_json", fake_chat_json)
+
+    result = await profiler.profile_repository_cards(limit=5)
+    assert result == {"profiled_cards": 0, "failed_cards": 1, "available_cards": 1}
+
+    row = catalog.get_connection().execute(
+        "SELECT gemma_profile FROM repository_cards WHERE card_id = ?",
+        [card_id],
+    ).fetchone()
+    assert row is not None
+    assert row[0] is None
+    runs = catalog.get_connection().execute(
+        "SELECT status FROM analysis_runs WHERE stage_name = 'profile'"
+    ).fetchall()
+    assert runs == [("failed",)]
+
+
+@pytest.mark.asyncio
+async def test_profile_repository_cards_reprofiles_old_schema(tmp_path, monkeypatch) -> None:
+    card_id = _create_repository_card(tmp_path)
+    catalog.update_repository_card_gemma_profile(
+        card_id,
+        {
+            "schema_version": "gemma-profile-v1",
+            "repository_type": "reference_application",
+            "capabilities": [],
+            "likely_usefulness": 0.5,
+            "extractability": 0.5,
+            "maintenance_quality": 0.5,
+            "needs_fastcontext": True,
+            "concerns": ["old schema"],
+        },
+    )
+
+    async def fake_validate_models(config: lmstudio.LMStudioConfig) -> dict[str, Any]:
+        return {
+            "models": [config.gemma_model],
+            "gemma_available": True,
+            "fastcontext_available": False,
+        }
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "repository_type": "reference_application",
+            "capabilities": [],
+            "likely_usefulness": 0.7,
+            "extractability": 0.6,
+            "maintenance_quality": 0.5,
+            "needs_fastcontext": False,
+            "concerns": ["new schema"],
+        }
+
+    monkeypatch.setattr(profiler.lmstudio, "validate_models", fake_validate_models)
+    monkeypatch.setattr(profiler.lmstudio, "chat_json", fake_chat_json)
+
+    result = await profiler.profile_repository_cards(limit=5)
+    assert result == {"profiled_cards": 1, "failed_cards": 0, "available_cards": 1}
+
+    row = catalog.get_connection().execute(
+        "SELECT gemma_profile FROM repository_cards WHERE card_id = ?",
+        [card_id],
+    ).fetchone()
+    assert row is not None
+    stored = json.loads(row[0])
+    assert stored["schema_version"] == profiler.PROFILE_SCHEMA_VERSION
+
+
 def test_lmstudio_status_cli_prints_json(monkeypatch, capsys) -> None:
     import source_scout.__main__ as main_module
 
@@ -539,7 +622,7 @@ def test_lmstudio_status_cli_prints_json(monkeypatch, capsys) -> None:
         sys,
         "argv",
         [
-            "source-scout",
+            "source_scout",
             "lmstudio-status",
             "--start-server",
             "--smoke-test",
@@ -712,7 +795,7 @@ def test_profile_cli_invokes_profiler(monkeypatch, capsys) -> None:
         return {"profiled_cards": 2}
 
     monkeypatch.setattr(profiler, "profile_repository_cards", fake_profile)
-    monkeypatch.setattr(sys, "argv", ["source-scout", "profile", "--limit", "2", "--force"])
+    monkeypatch.setattr(sys, "argv", ["source_scout", "profile", "--limit", "2", "--force"])
     main_module.main()
     captured = capsys.readouterr()
     assert "{'profiled_cards': 2}" in captured.out

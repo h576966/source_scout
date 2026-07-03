@@ -3,8 +3,8 @@ from typing import Any
 
 from . import catalog, lmstudio
 
-PROMPT_VERSION = "gemma-repo-card-v1"
-PROFILE_SCHEMA_VERSION = "gemma-profile-v1"
+PROMPT_VERSION = "gemma-repo-card-v2"
+PROFILE_SCHEMA_VERSION = "gemma-profile-v2"
 ALLOWED_REPOSITORY_TYPES = {
     "library",
     "design_system",
@@ -12,6 +12,55 @@ ALLOWED_REPOSITORY_TYPES = {
     "starter",
     "tooling",
     "examples",
+}
+PROFILE_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "repository_profile",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "repository_type": {
+                    "type": "string",
+                    "enum": sorted(ALLOWED_REPOSITORY_TYPES),
+                },
+                "capabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "confidence": {"type": "number"},
+                            "evidence": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["name", "confidence", "evidence"],
+                        "additionalProperties": True,
+                    },
+                },
+                "likely_usefulness": {"type": "number"},
+                "extractability": {"type": "number"},
+                "maintenance_quality": {"type": "number"},
+                "needs_fastcontext": {"type": "boolean"},
+                "concerns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": [
+                "repository_type",
+                "capabilities",
+                "likely_usefulness",
+                "extractability",
+                "maintenance_quality",
+                "needs_fastcontext",
+                "concerns",
+            ],
+            "additionalProperties": True,
+        },
+    },
 }
 
 
@@ -87,7 +136,7 @@ def validate_gemma_profile(profile: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(concerns, list):
         concerns = []
 
-    return {
+    normalized = {
         "schema_version": PROFILE_SCHEMA_VERSION,
         "repository_type": repository_type,
         "capabilities": normalized_capabilities,
@@ -97,6 +146,12 @@ def validate_gemma_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "needs_fastcontext": bool(profile.get("needs_fastcontext", True)),
         "concerns": [str(value) for value in concerns],
     }
+    if _is_uninformative_profile(normalized):
+        raise ValueError(
+            "Gemma profile was uninformative: all quality scores are zero with no "
+            "capabilities or concerns."
+        )
+    return normalized
 
 
 def _clamp_float(value: Any) -> float:
@@ -110,7 +165,11 @@ def _clamp_float(value: Any) -> float:
 async def profile_repository_cards(limit: int, force: bool = False) -> dict[str, int]:
     config = lmstudio.get_config()
     await _ensure_gemma_available(config)
-    cards = catalog.list_repository_cards_for_profile(limit, force=force)
+    cards = catalog.list_repository_cards_for_profile(
+        limit,
+        force=force,
+        profile_schema_version=PROFILE_SCHEMA_VERSION,
+    )
     profiled = 0
     failed = 0
 
@@ -121,9 +180,21 @@ async def profile_repository_cards(limit: int, force: bool = False) -> dict[str,
                 messages=_profile_messages(card),
                 config=config,
                 max_tokens=3000,
-                attempts=2,
+                attempts=1,
+                response_format=PROFILE_RESPONSE_FORMAT,
             )
-            profile = validate_gemma_profile(raw_profile)
+            try:
+                profile = validate_gemma_profile(raw_profile)
+            except Exception as exc:
+                repair_response = await lmstudio.chat_json(
+                    model_id=config.gemma_model,
+                    messages=_repair_messages(card, raw_profile, [f"{type(exc).__name__}: {exc}"]),
+                    config=config,
+                    max_tokens=3000,
+                    attempts=1,
+                    response_format=PROFILE_RESPONSE_FORMAT,
+                )
+                profile = validate_gemma_profile(repair_response)
             catalog.update_repository_card_gemma_profile(str(card["card_id"]), profile)
             catalog.record_analysis_run(
                 "profile",
@@ -160,3 +231,31 @@ async def _ensure_gemma_available(config: lmstudio.LMStudioConfig) -> None:
         raise lmstudio.LMStudioError(
             f"Configured Gemma model '{config.gemma_model}' is not available in LM Studio."
         )
+
+
+def _repair_messages(
+    card: dict[str, Any],
+    raw_response: dict[str, Any] | None,
+    validation_errors: list[str],
+) -> list[dict[str, str]]:
+    return [
+        *_profile_messages(card),
+        {"role": "assistant", "content": json.dumps(raw_response or {}, sort_keys=True)},
+        {
+            "role": "user",
+            "content": (
+                "Repair the JSON once. Return only the same schema. Validation errors:\n"
+                f"{json.dumps(validation_errors, sort_keys=True)}"
+            ),
+        },
+    ]
+
+
+def _is_uninformative_profile(profile: dict[str, Any]) -> bool:
+    return (
+        profile.get("likely_usefulness") == 0
+        and profile.get("extractability") == 0
+        and profile.get("maintenance_quality") == 0
+        and not profile.get("capabilities")
+        and not profile.get("concerns")
+    )

@@ -187,6 +187,7 @@ def build_evidence_ledger(
         max_items=max_items,
         max_total_prompt_chars=max_total_prompt_chars,
     )
+    _assign_prompt_evidence_ids(budgeted)
     validation_notes.extend(budget_notes)
     return EvidenceLedgerResult(
         items=budgeted,
@@ -250,7 +251,7 @@ def _materialize_item(
         start_line=start_line,
         max_chars=max_chars_per_item,
     )
-    evidence_id = _evidence_id(
+    stable_evidence_id = _stable_evidence_id(
         commit_sha=commit_sha,
         path=safe_rel,
         start_line=start_line,
@@ -262,7 +263,8 @@ def _materialize_item(
         notes.append(f"Capped evidence snippet characters: {safe_rel}:{start_line}-{end_line}")
     return (
         {
-            "evidence_id": evidence_id,
+            "evidence_id": stable_evidence_id,
+            "stable_evidence_id": stable_evidence_id,
             "origins": [origin],
             "path": safe_rel,
             "start_line": start_line,
@@ -314,7 +316,7 @@ def _numbered_snippet(
     return "".join(numbered), capped
 
 
-def _evidence_id(
+def _stable_evidence_id(
     *,
     commit_sha: str,
     path: str,
@@ -324,6 +326,11 @@ def _evidence_id(
 ) -> str:
     identity = "\0".join([commit_sha, path, str(start_line), str(end_line), content_hash])
     return f"E_{hashlib.sha256(identity.encode()).hexdigest()[:20]}"
+
+
+def _assign_prompt_evidence_ids(items: list[dict[str, Any]]) -> None:
+    for index, item in enumerate(items, start=1):
+        item["evidence_id"] = f"E{index}"
 
 
 def _ordered_origins(origins: set[str]) -> list[str]:
