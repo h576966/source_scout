@@ -465,6 +465,59 @@ def _create_repository_card(tmp_path: Path) -> str:
     return catalog.upsert_repository_card(snapshot_id, pipeline.build_repository_card(snapshot_root))
 
 
+def _create_profile_candidate(
+    tmp_path: Path,
+    owner: str,
+    *,
+    stars: int,
+    asset_score: float,
+    profile: dict[str, Any] | None = None,
+) -> str:
+    snapshot_root = tmp_path / owner
+    snapshot_root.mkdir()
+    _write_card_fixture(snapshot_root)
+    repo_id = catalog.upsert_repository(
+        {
+            "owner": {"login": owner},
+            "name": "repo",
+            "full_name": f"{owner}/repo",
+            "html_url": f"https://github.com/{owner}/repo",
+            "private": False,
+            "archived": False,
+            "mirror_url": None,
+            "fork": False,
+            "is_template": False,
+            "language": "TypeScript",
+            "size": 100,
+            "created_at": "2026-01-01T00:00:00Z",
+            "pushed_at": "2026-06-20T12:00:00Z",
+            "topics": ["nextjs"],
+            "stargazers_count": stars,
+            "forks_count": 1,
+        },
+        "test",
+    )
+    snapshot_id = catalog.upsert_snapshot(repo_id, f"{owner}sha", "main", snapshot_root)
+    card = pipeline.build_repository_card(snapshot_root)
+    if profile is not None:
+        card["gemma_profile"] = profile
+    card_id = catalog.upsert_repository_card(snapshot_id, card)
+    catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "data-table",
+        {
+            "entry_paths": ["app/page.tsx"],
+            "dependency_paths": ["package.json"],
+            "external_dependencies": ["@tanstack/react-table"],
+            "evidence_paths": ["app/page.tsx:1-1"],
+            "synthesis": {"noise_penalty": 0.0},
+            "reuse_score": asset_score,
+        },
+    )
+    return card_id
+
+
 @pytest.mark.asyncio
 async def test_profile_repository_cards_stores_gemma_profile(tmp_path, monkeypatch) -> None:
     card_id = _create_repository_card(tmp_path)
@@ -597,6 +650,51 @@ async def test_profile_repository_cards_reprofiles_old_schema(tmp_path, monkeypa
     assert row is not None
     stored = json.loads(row[0])
     assert stored["schema_version"] == profiler.PROFILE_SCHEMA_VERSION
+
+
+@pytest.mark.asyncio
+async def test_profile_repository_cards_audit_priority_selects_best_downloaded_target(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    high_card_id = _create_profile_candidate(tmp_path, "high", stars=1, asset_score=0.95)
+    low_card_id = _create_profile_candidate(tmp_path, "low", stars=100, asset_score=0.5)
+
+    async def fake_validate_models(config: lmstudio.LMStudioConfig) -> dict[str, Any]:
+        return {
+            "models": [config.gemma_model],
+            "gemma_available": True,
+            "fastcontext_available": False,
+        }
+
+    async def fake_chat_json(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "repository_type": "reference_application",
+            "capabilities": [],
+            "likely_usefulness": 0.8,
+            "extractability": 0.8,
+            "maintenance_quality": 0.8,
+            "needs_fastcontext": False,
+            "concerns": [],
+        }
+
+    monkeypatch.setattr(profiler.lmstudio, "validate_models", fake_validate_models)
+    monkeypatch.setattr(profiler.lmstudio, "chat_json", fake_chat_json)
+
+    result = await profiler.profile_repository_cards(limit=1, priority="audit", scope="downloaded")
+
+    assert result == {"profiled_cards": 1, "failed_cards": 0, "available_cards": 1}
+    rows = catalog.get_connection().execute(
+        """
+        SELECT card_id, gemma_profile
+        FROM repository_cards
+        WHERE card_id IN (?, ?)
+        """,
+        [high_card_id, low_card_id],
+    ).fetchall()
+    profiles = {str(card_id): profile for card_id, profile in rows}
+    assert profiles[high_card_id] is not None
+    assert profiles[low_card_id] is None
 
 
 def test_lmstudio_status_cli_prints_json(monkeypatch, capsys) -> None:
@@ -789,13 +887,25 @@ async def test_lmstudio_status_reports_start_failure_as_json(monkeypatch) -> Non
 def test_profile_cli_invokes_profiler(monkeypatch, capsys) -> None:
     import source_scout.__main__ as main_module
 
-    async def fake_profile(limit: int, force: bool = False) -> dict[str, int]:
+    async def fake_profile(
+        limit: int,
+        force: bool = False,
+        *,
+        priority: str = "created-at",
+        scope: str = "downloaded",
+    ) -> dict[str, int]:
         assert limit == 2
         assert force is True
+        assert priority == "audit"
+        assert scope == "cataloged"
         return {"profiled_cards": 2}
 
     monkeypatch.setattr(profiler, "profile_repository_cards", fake_profile)
-    monkeypatch.setattr(sys, "argv", ["source_scout", "profile", "--limit", "2", "--force"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["source_scout", "profile", "--limit", "2", "--force", "--priority", "audit", "--scope", "cataloged"],
+    )
     main_module.main()
     captured = capsys.readouterr()
     assert "{'profiled_cards': 2}" in captured.out

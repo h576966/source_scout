@@ -162,14 +162,27 @@ def _clamp_float(value: Any) -> float:
     return round(max(0.0, min(parsed, 1.0)), 4)
 
 
-async def profile_repository_cards(limit: int, force: bool = False) -> dict[str, int]:
+async def profile_repository_cards(
+    limit: int,
+    force: bool = False,
+    *,
+    priority: str = "created-at",
+    scope: str = "downloaded",
+) -> dict[str, int]:
     config = lmstudio.get_config()
     await _ensure_gemma_available(config)
-    cards = catalog.list_repository_cards_for_profile(
-        limit,
-        force=force,
-        profile_schema_version=PROFILE_SCHEMA_VERSION,
-    )
+    if priority == "created-at":
+        cards = catalog.list_repository_cards_for_profile(
+            limit,
+            force=force,
+            profile_schema_version=PROFILE_SCHEMA_VERSION,
+        )
+    elif priority == "audit":
+        from .catalog_audit import list_profile_cards_by_audit_priority
+
+        cards = list_profile_cards_by_audit_priority(limit, scope=scope, force=force)
+    else:
+        raise ValueError("priority must be 'created-at' or 'audit'.")
     profiled = 0
     failed = 0
 

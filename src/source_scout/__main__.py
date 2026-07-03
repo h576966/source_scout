@@ -102,6 +102,16 @@ def main() -> None:
     )
     profile_parser.add_argument("--limit", type=int, default=30)
     profile_parser.add_argument("--force", action="store_true")
+    profile_parser.add_argument("--priority", choices=["created-at", "audit"], default="created-at")
+    profile_parser.add_argument("--scope", choices=["downloaded", "cataloged", "all"], default="downloaded")
+
+    audit_parser = subparsers.add_parser(
+        "audit",
+        help="Audit catalog quality and cleanup candidates",
+    )
+    audit_parser.add_argument("--limit", type=int, default=10, help="Max repos per bucket")
+    audit_parser.add_argument("--bucket", default=None, help="Optional bucket filter")
+    audit_parser.add_argument("--scope", choices=["downloaded", "cataloged", "all"], default="downloaded")
 
     assess_parser = subparsers.add_parser(
         "assess",
@@ -281,8 +291,25 @@ def main() -> None:
     if args.command == "profile":
         from .profiler import profile_repository_cards
 
-        result = asyncio.run(profile_repository_cards(args.limit, force=args.force))
+        result = asyncio.run(
+            profile_repository_cards(
+                args.limit,
+                force=args.force,
+                priority=args.priority,
+                scope=args.scope,
+            )
+        )
         print(result)
+        return
+
+    if args.command == "audit":
+        from .catalog_audit import audit_catalog
+
+        try:
+            result = audit_catalog(limit_per_bucket=args.limit, bucket=args.bucket, scope=args.scope)
+        except ValueError as exc:
+            audit_parser.error(str(exc))
+        print(json.dumps(result, indent=2, sort_keys=True))
         return
 
     if args.command == "assess":
