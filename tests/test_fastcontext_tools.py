@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from source_scout import fastcontext, fastcontext_tools, lmstudio
-from tests.fastcontext_helpers import _write_snapshot
+from tests.fastcontext_helpers import _response_message_json, _write_snapshot
 
 
 def test_fastcontext_tools_are_sandboxed_and_read_only(tmp_path: Path) -> None:
@@ -486,37 +486,31 @@ async def test_fastcontext_uses_structured_output_and_retries_without_schema() -
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal chat_calls
-        assert request.url.path == "/v1/chat/completions"
+        assert request.url.path == "/v1/responses"
         chat_calls += 1
         payload = json.loads(request.content)
         if chat_calls == 1:
-            assert payload["response_format"]["type"] == "json_schema"
+            assert payload["text"]["format"]["type"] == "json_schema"
             return httpx.Response(400, json={"error": "structured output unsupported"})
-        assert "response_format" not in payload
+        assert "text" not in payload
         return httpx.Response(
             200,
-            json={
-                "choices": [
+            json=_response_message_json(
+                json.dumps(
                     {
-                        "message": {
-                            "content": json.dumps(
+                        "final_answer": {
+                            "evidence": [
                                 {
-                                    "final_answer": {
-                                        "evidence": [
-                                            {
-                                                "path": "src/components/data-table.tsx",
-                                                "start_line": 1,
-                                                "end_line": 4,
-                                            }
-                                        ],
-                                        "notes": ["Fallback parser still works."],
-                                    }
+                                    "path": "src/components/data-table.tsx",
+                                    "start_line": 1,
+                                    "end_line": 4,
                                 }
-                            )
+                            ],
+                            "notes": ["Schema-free retry still works."],
                         }
                     }
-                ]
-            },
+                )
+            ),
         )
 
     content = await fastcontext._chat_fastcontext(
@@ -529,4 +523,4 @@ async def test_fastcontext_uses_structured_output_and_retries_without_schema() -
     )
 
     assert chat_calls == 2
-    assert json.loads(content)["final_answer"]["notes"] == ["Fallback parser still works."]
+    assert json.loads(content)["final_answer"]["notes"] == ["Schema-free retry still works."]

@@ -37,6 +37,8 @@ Useful implementation notes for the current Source Scout product path.
 
 - LM Studio is the intended local OpenAI-compatible endpoint.
 - Default endpoint: `http://127.0.0.1:1234/v1`.
+- Source Scout sends model requests through the OpenAI Python SDK using LM
+  Studio's `/v1/responses` compatibility endpoint.
 - Windows CLI: `C:\Users\Nikla\.lmstudio\bin\lms.exe`.
 - Gemma is for JSON profiling/synthesis after deterministic evidence exists.
 - FastContext is for evidence refinement over read-only `READ`, `GLOB`, and
@@ -46,6 +48,17 @@ Useful implementation notes for the current Source Scout product path.
   `source-scout eval-local-explore --suite source-scout --max-turns 7`.
 - Final FastContext evidence is budgeted to at most three citations across at
   most three files, with one or two tight ranges preferred.
+
+## Prompt Maintenance
+
+- Keep production prompts in source code and review them like application logic.
+- Bump the relevant `PROMPT_VERSION` whenever prompt behavior changes.
+- Prefer short, outcome-first prompts with explicit evidence rules, retrieval
+  budgets, validation rules, and output schema expectations.
+- For tool-heavy Responses flows, preserve prior assistant output items before
+  appending function-call outputs.
+- Do not add broad process instructions unless tests or evals show they improve
+  retrieval or assessment quality.
 
 Local status and smoke tests:
 

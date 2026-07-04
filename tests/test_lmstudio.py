@@ -9,6 +9,54 @@ import pytest
 from source_scout import catalog, lmstudio, pipeline, profiler
 
 
+def _response_message_json(content: str) -> dict[str, Any]:
+    return {
+        "id": "resp-1",
+        "object": "response",
+        "created_at": 0,
+        "model": "test-model",
+        "output": [
+            {
+                "id": "msg-1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": content, "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": False,
+        "status": "completed",
+        "text": {"format": {"type": "text"}},
+    }
+
+
+def _response_tool_call_json(
+    *,
+    name: str = "Read",
+    arguments: str = '{"path":"src/app.py","offset":3,"limit":20}',
+    call_id: str = "call-1",
+) -> dict[str, Any]:
+    return {
+        "id": "resp-1",
+        "object": "response",
+        "created_at": 0,
+        "model": "test-model",
+        "output": [
+            {
+                "id": "fc-1",
+                "type": "function_call",
+                "call_id": call_id,
+                "name": name,
+                "arguments": arguments,
+                "status": "completed",
+            }
+        ],
+        "parallel_tool_calls": True,
+        "status": "completed",
+        "text": {"format": {"type": "text"}},
+    }
+
+
 def test_lmstudio_config_defaults(monkeypatch) -> None:
     monkeypatch.delenv("LM_STUDIO_BASE_URL", raising=False)
     monkeypatch.delenv("SOURCE_SCOUT_GEMMA_MODEL", raising=False)
@@ -269,19 +317,14 @@ def test_load_gemma_model_uses_expected_context_and_reloads_existing_model(monke
 
 
 @pytest.mark.asyncio
-async def test_chat_json_posts_chat_completion_and_parses_json() -> None:
+async def test_chat_json_posts_response_and_parses_json() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/chat/completions"
+        assert request.url.path == "/v1/responses"
         payload = json.loads(request.content)
         assert payload["model"] == "gemma"
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {"message": {"content": '```json\n{"ok": true}\n```'}},
-                ],
-            },
-        )
+        assert payload["input"] == [{"role": "user", "content": "return json"}]
+        assert payload["max_output_tokens"] == 1600
+        return httpx.Response(200, json=_response_message_json('```json\n{"ok": true}\n```'))
 
     transport = httpx.MockTransport(handler)
     result = await lmstudio.chat_json(
@@ -298,8 +341,12 @@ async def test_chat_json_passes_response_format() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
-        assert payload["response_format"] == response_format
-        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": true}'}}]})
+        assert payload["text"]["format"] == {
+            "type": "json_schema",
+            "name": "x",
+            "schema": {"type": "object"},
+        }
+        return httpx.Response(200, json=_response_message_json('{"ok": true}'))
 
     transport = httpx.MockTransport(handler)
     result = await lmstudio.chat_json(
@@ -316,7 +363,7 @@ async def test_chat_completion_passes_seed_when_configured() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         assert payload["seed"] == 123
-        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+        return httpx.Response(200, json=_response_message_json("ok"))
 
     transport = httpx.MockTransport(handler)
     result = await lmstudio.chat_completion(
@@ -332,33 +379,12 @@ async def test_chat_completion_passes_seed_when_configured() -> None:
 @pytest.mark.asyncio
 async def test_chat_completion_posts_tools_and_parses_tool_calls() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/chat/completions"
+        assert request.url.path == "/v1/responses"
         payload = json.loads(request.content)
-        assert payload["tools"][0]["function"]["name"] == "Read"
+        assert payload["tools"][0]["name"] == "Read"
+        assert payload["tools"][0]["parameters"] == {"type": "object"}
         assert payload["tool_choice"] == "auto"
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": "call-1",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "Read",
-                                        "arguments": '{"path":"src/app.py","offset":3,"limit":20}',
-                                    },
-                                }
-                            ],
-                        },
-                    }
-                ]
-            },
-        )
+        return httpx.Response(200, json=_response_tool_call_json())
 
     transport = httpx.MockTransport(handler)
     result = await lmstudio.chat_completion(
@@ -380,30 +406,13 @@ async def test_chat_completion_posts_tools_and_parses_tool_calls() -> None:
     assert result.tool_calls[0].id == "call-1"
     assert result.tool_calls[0].name == "Read"
     assert result.tool_calls[0].arguments == {"path": "src/app.py", "offset": 3, "limit": 20}
+    assert result.output_items[0]["type"] == "function_call"
 
 
 @pytest.mark.asyncio
 async def test_chat_completion_keeps_malformed_tool_arguments_nonfatal() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": "call-1",
-                                    "type": "function",
-                                    "function": {"name": "Grep", "arguments": "{bad"},
-                                }
-                            ],
-                        }
-                    }
-                ]
-            },
-        )
+        return httpx.Response(200, json=_response_tool_call_json(name="Grep", arguments="{bad"))
 
     result = await lmstudio.chat_completion(
         "fastcontext",
@@ -418,12 +427,9 @@ async def test_chat_completion_keeps_malformed_tool_arguments_nonfatal() -> None
 @pytest.mark.asyncio
 async def test_chat_text_still_requires_text_content() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={"choices": [{"message": {"content": "", "tool_calls": []}}]},
-        )
+        return httpx.Response(200, json=_response_message_json(""))
 
-    with pytest.raises(lmstudio.LMStudioError, match="empty chat completion"):
+    with pytest.raises(lmstudio.LMStudioError, match="empty response"):
         await lmstudio.chat_text(
             "fastcontext",
             [{"role": "user", "content": "find code"}],

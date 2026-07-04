@@ -16,8 +16,12 @@ from .capabilities import (
     UI_CAPABILITIES,
 )
 from .catalog_scoring import (
+    MIN_LABEL_SIGNAL,
+    POSSIBLE_LABEL_SCORE_CAP,
+    STRONG_LABEL_SIGNAL,
     _backend_path_alignment_score,
     _capability_intent_scores,
+    _capability_label_signal_score,
     _float_value,
     _has_backend_path,
     _has_profile_signal,
@@ -799,17 +803,28 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         ui_path_score = _synthesis_score(synthesis, "ui_path_score")
         noise_penalty = _synthesis_score(synthesis, "noise_penalty")
         capability_path_score = _synthesis_score(synthesis, "capability_path_score")
+        label_signal_score = _capability_label_signal_score(
+            capability,
+            entry_paths + evidence_paths,
+            external_dependencies,
+            synthesis,
+        )
+        if label_signal_score < MIN_LABEL_SIGNAL:
+            continue
         path_alignment_score = _backend_path_alignment_score(
             capability,
             entry_paths + evidence_paths,
         )
         base_score = _float_value(data.get("reuse_score"))
+        if label_signal_score < STRONG_LABEL_SIGNAL:
+            base_score = min(base_score, POSSIBLE_LABEL_SCORE_CAP)
         capability_intent_score = intent_scores.get(capability, 0.0)
         score = (
             (base_score * 0.55)
             + (ui_path_score * 0.2)
             + (profile_score * 0.25)
             + (capability_path_score * 0.12)
+            + (label_signal_score * 0.08)
             + (capability_intent_score * 0.28)
             + min(0.12, overlap * 0.035)
             - (noise_penalty * 0.16)
@@ -885,7 +900,7 @@ def search_assets(task: str, max_repos: int) -> list[ReusableCandidate]:
         if capability == "model-server-integration":
             has_model_server_path = _paths_contain_any(
                 entry_paths + evidence_paths,
-                {"chat", "completion", "lmstudio", "model", "models", "ollama", "openai"},
+                {"chat", "completion", "lmstudio", "model", "models", "ollama", "openai", "responses"},
             )
             if has_model_server_path:
                 score += 0.12

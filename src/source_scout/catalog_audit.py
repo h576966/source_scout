@@ -4,6 +4,11 @@ from pathlib import Path
 from typing import Any
 
 from . import catalog
+from .catalog_scoring import (
+    MIN_LABEL_SIGNAL,
+    STRONG_LABEL_SIGNAL,
+    _capability_label_signal_score,
+)
 from .constants import MAX_REPOSITORY_SIZE_KB, MAX_STALE_DAYS
 from .profiler import PROFILE_SCHEMA_VERSION
 
@@ -193,6 +198,9 @@ def _audit_repo(
     capability_tiers = _capability_tiers(assets)
     capability_counts = {tier: len(values) for tier, values in capability_tiers.items()}
     capability_counts["total"] = sum(capability_counts.values())
+    capability_counts["actionable"] = (
+        capability_counts.get("strong", 0) + capability_counts.get("possible", 0)
+    )
     quality_score = _quality_score(profile_quality, best_asset_score, len(assets))
     pushed_at = _parse_datetime(repo.get("pushed_at"))
     created_at = _parse_datetime(repo.get("repo_created_at"))
@@ -494,7 +502,8 @@ def _noisy_reasons(
     if _has_capability_explosion(capability_counts):
         reasons.append(
             "capability explosion: "
-            f"{capability_counts['total']} labels, {capability_counts['strong']} strong"
+            f"{capability_counts['actionable']} actionable labels, "
+            f"{capability_counts['strong']} strong"
         )
     return reasons
 
@@ -532,23 +541,41 @@ def _capability_tiers(assets: list[dict[str, Any]]) -> dict[str, list[str]]:
 
 
 def _capability_tier(asset: dict[str, Any]) -> str:
+    capability = str(asset.get("capability") or "")
     reuse_score = _float_value(asset.get("reuse_score"))
+    entry_paths = _asset_entry_paths(asset)
     evidence_paths = _asset_evidence_paths(asset)
+    external_dependencies = _asset_external_dependencies(asset)
     synthesis = _asset_synthesis(asset)
     noise_penalty = _float_value(synthesis.get("noise_penalty"))
+    label_signal = _capability_label_signal_score(
+        capability,
+        entry_paths + evidence_paths,
+        external_dependencies,
+        synthesis,
+    )
     if (
         reuse_score >= STRONG_CAPABILITY_SCORE
         and evidence_paths
         and noise_penalty < STRONG_CAPABILITY_MAX_NOISE
+        and label_signal >= STRONG_LABEL_SIGNAL
     ):
         return "strong"
     if (
         reuse_score >= POSSIBLE_CAPABILITY_SCORE
         and evidence_paths
         and noise_penalty < POSSIBLE_CAPABILITY_MAX_NOISE
+        and label_signal >= MIN_LABEL_SIGNAL
     ):
         return "possible"
     return "weak_noisy"
+
+
+def _asset_entry_paths(asset: dict[str, Any]) -> list[str]:
+    loaded = _json_load(asset.get("entry_paths"), [])
+    if not isinstance(loaded, list):
+        return []
+    return [str(path) for path in loaded if str(path).strip()]
 
 
 def _asset_evidence_paths(asset: dict[str, Any]) -> list[str]:
@@ -558,6 +585,13 @@ def _asset_evidence_paths(asset: dict[str, Any]) -> list[str]:
     return [str(path) for path in loaded if str(path).strip()]
 
 
+def _asset_external_dependencies(asset: dict[str, Any]) -> list[str]:
+    loaded = _json_load(asset.get("external_dependencies"), [])
+    if not isinstance(loaded, list):
+        return []
+    return [str(dependency) for dependency in loaded if str(dependency).strip()]
+
+
 def _asset_synthesis(asset: dict[str, Any]) -> dict[str, Any]:
     loaded = _json_load(asset.get("synthesis"), {})
     return loaded if isinstance(loaded, dict) else {}
@@ -565,7 +599,7 @@ def _asset_synthesis(asset: dict[str, Any]) -> dict[str, Any]:
 
 def _has_capability_explosion(capability_counts: dict[str, int]) -> bool:
     return (
-        capability_counts.get("total", 0) >= EXPLOSION_TOTAL_CAPABILITY_COUNT
+        capability_counts.get("actionable", 0) >= EXPLOSION_TOTAL_CAPABILITY_COUNT
         or capability_counts.get("strong", 0) >= EXPLOSION_STRONG_CAPABILITY_COUNT
     )
 

@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from source_scout import catalog, fastcontext, lmstudio
-from tests.fastcontext_helpers import _payload_message_text, _write_snapshot
+from tests.fastcontext_helpers import _payload_message_text, _response_message_json, _write_snapshot
 
 
 @pytest.mark.asyncio
@@ -22,64 +22,52 @@ async def test_explore_local_project_returns_ephemeral_citations(tmp_path: Path)
                 200,
                 json={"data": [{"id": lmstudio.DEFAULT_FASTCONTEXT_MODEL}]},
             )
-        assert request.url.path == "/v1/chat/completions"
+        assert request.url.path == "/v1/responses"
         chat_calls += 1
         payload = json.loads(request.content)
         assert payload["model"] == lmstudio.DEFAULT_FASTCONTEXT_MODEL
         if chat_calls == 1:
-            assert "local-project-exploration" in payload["messages"][-1]["content"]
-            assert "Find the data table" in payload["messages"][-1]["content"]
+            assert "local-project-exploration" in payload["input"][-1]["content"]
+            assert "Find the data table" in payload["input"][-1]["content"]
             return httpx.Response(
                 200,
-                json={
-                    "choices": [
+                json=_response_message_json(
+                    json.dumps(
                         {
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "tool_calls": [
-                                            {
-                                                "tool": "GREP",
-                                                "args": {
-                                                    "pattern": "useReactTable",
-                                                    "glob": "**/*.tsx",
-                                                },
-                                            }
-                                        ]
-                                    }
-                                )
-                            }
+                            "tool_calls": [
+                                {
+                                    "tool": "GREP",
+                                    "args": {
+                                        "pattern": "useReactTable",
+                                        "glob": "**/*.tsx",
+                                    },
+                                }
+                            ]
                         }
-                    ]
-                },
+                    )
+                ),
             )
         assert "src/components/data-table.tsx" in _payload_message_text(payload)
         assert "tools" not in payload
         return httpx.Response(
             200,
-            json={
-                "choices": [
+            json=_response_message_json(
+                json.dumps(
                     {
-                        "message": {
-                            "content": json.dumps(
+                        "final_answer": {
+                            "evidence": [
                                 {
-                                    "final_answer": {
-                                        "evidence": [
-                                            {
-                                                "path": "src/components/data-table.tsx",
-                                                "start_line": 1,
-                                                "end_line": 4,
-                                                "reason": "Relevant table implementation",
-                                            }
-                                        ],
-                                        "notes": ["Inspect this component before editing."],
-                                    }
+                                    "path": "src/components/data-table.tsx",
+                                    "start_line": 1,
+                                    "end_line": 4,
+                                    "reason": "Relevant table implementation",
                                 }
-                            )
+                            ],
+                            "notes": ["Inspect this component before editing."],
                         }
                     }
-                ]
-            },
+                )
+            ),
         )
 
     result = await fastcontext.explore_local_project(
@@ -126,81 +114,63 @@ async def test_explore_local_project_recovers_from_invalid_citation(tmp_path: Pa
         if chat_calls == 1:
             return httpx.Response(
                 200,
-                json={
-                    "choices": [
+                json=_response_message_json(
+                    json.dumps(
                         {
-                            "message": {
-                                "content": json.dumps(
+                            "final_answer": {
+                                "evidence": [
                                     {
-                                        "final_answer": {
-                                            "evidence": [
-                                                {
-                                                    "path": "src/missing.ts",
-                                                    "start_line": 1,
-                                                    "end_line": 3,
-                                                }
-                                            ],
-                                            "notes": [],
-                                        }
+                                        "path": "src/missing.ts",
+                                        "start_line": 1,
+                                        "end_line": 3,
                                     }
-                                )
+                                ],
+                                "notes": [],
                             }
                         }
-                    ]
-                },
+                    )
+                ),
             )
         if chat_calls == 2:
-            assert "did not validate" in payload["messages"][-1]["content"]
+            assert "did not validate" in payload["input"][-1]["content"]
             return httpx.Response(
                 200,
-                json={
-                    "choices": [
+                json=_response_message_json(
+                    json.dumps(
                         {
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "tool_calls": [
-                                            {
-                                                "tool": "GREP",
-                                                "args": {
-                                                    "pattern": "useReactTable",
-                                                    "glob": "**/*.tsx",
-                                                },
-                                            }
-                                        ]
-                                    }
-                                )
-                            }
+                            "tool_calls": [
+                                {
+                                    "tool": "GREP",
+                                    "args": {
+                                        "pattern": "useReactTable",
+                                        "glob": "**/*.tsx",
+                                    },
+                                }
+                            ]
                         }
-                    ]
-                },
+                    )
+                ),
             )
         assert "src/components/data-table.tsx" in _payload_message_text(payload)
         assert "tools" not in payload
         return httpx.Response(
             200,
-            json={
-                "choices": [
+            json=_response_message_json(
+                json.dumps(
                     {
-                        "message": {
-                            "content": json.dumps(
+                        "final_answer": {
+                            "evidence": [
                                 {
-                                    "final_answer": {
-                                        "evidence": [
-                                            {
-                                                "path": "src/components/data-table.tsx",
-                                                "start_line": 1,
-                                                "end_line": 4,
-                                            }
-                                        ],
-                                        "notes": ["Recovered after validation feedback."],
-                                    }
+                                    "path": "src/components/data-table.tsx",
+                                    "start_line": 1,
+                                    "end_line": 4,
                                 }
-                            )
+                            ],
+                            "notes": ["Recovered after validation feedback."],
                         }
                     }
-                ]
-            },
+                )
+            ),
         )
 
     result = await fastcontext.explore_local_project(
@@ -231,28 +201,22 @@ async def test_explore_local_project_writes_trace_file(tmp_path: Path) -> None:
             )
         return httpx.Response(
             200,
-            json={
-                "choices": [
+            json=_response_message_json(
+                json.dumps(
                     {
-                        "message": {
-                            "content": json.dumps(
+                        "final_answer": {
+                            "evidence": [
                                 {
-                                    "final_answer": {
-                                        "evidence": [
-                                            {
-                                                "path": "src/components/data-table.tsx",
-                                                "start_line": 1,
-                                                "end_line": 1,
-                                            }
-                                        ],
-                                        "notes": [],
-                                    }
+                                    "path": "src/components/data-table.tsx",
+                                    "start_line": 1,
+                                    "end_line": 1,
                                 }
-                            )
+                            ],
+                            "notes": [],
                         }
                     }
-                ]
-            },
+                )
+            ),
         )
 
     await fastcontext.explore_local_project(

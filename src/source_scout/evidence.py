@@ -5,7 +5,18 @@ from pathlib import Path
 from typing import Any
 
 from . import catalog
-from .capabilities import AI_DATA_CAPABILITIES, DOMAIN_CAPABILITIES
+from .capabilities import (
+    AI_DATA_CAPABILITIES,
+    CONCRETE_CAPABILITY_DEPENDENCIES,
+    DOMAIN_CAPABILITIES,
+)
+from .catalog_scoring import (
+    MANIFEST_ONLY_SCORE_CAP,
+    MIN_LABEL_SIGNAL,
+    POSSIBLE_LABEL_SCORE_CAP,
+    STRONG_LABEL_SIGNAL,
+    _capability_label_signal_score,
+)
 from .constants import SKIP_DIRS
 
 SOURCE_EXTENSIONS = {".tsx", ".ts", ".jsx", ".js", ".css", ".mdx", ".py"}
@@ -41,6 +52,14 @@ BACKEND_CAPABILITIES = {
     "admin-export",
 }
 AI_AND_DATA_CAPABILITIES = set(AI_DATA_CAPABILITIES)
+SOURCE_SUPPORT_REQUIRED_CAPABILITIES = {
+    "admin-export",
+    "background-jobs",
+    "email-webhooks",
+    "file-storage",
+    "trpc-router",
+    "validation-schemas",
+}
 BACKEND_PATH_PARTS = {
     "actions",
     "api",
@@ -146,11 +165,11 @@ CAPABILITY_PATH_HINTS: dict[str, set[str]] = {
         "upload",
         "uploads",
     },
-    "email-webhooks": {"email", "webhook", "message", "handler"},
+    "email-webhooks": {"inbound", "mailbox", "nodemailer", "resend", "webhook", "webhooks"},
     "background-jobs": {"worker", "job", "cron", "schedule", "sync", "queue"},
     "validation-schemas": {"validation", "schema", "schemas", "zod", "resolver"},
-    "admin-export": {"export", "report", "reports", "pdf", "excel", "xlsx"},
-    "llm-harness": {"agent", "agents", "chat", "completion", "harness", "llm", "prompt"},
+    "admin-export": {"export", "exports", "pdf", "excel", "xlsx"},
+    "llm-harness": {"agent", "agents", "chat", "completion", "harness", "llm", "prompt", "responses"},
     "local-ai-integration": {"llama", "llamacpp", "lmstudio", "ollama", "server", "vllm"},
     "rag-retrieval": {"chunk", "embed", "embedding", "index", "rag", "retrieval", "vector"},
     "eval-harness": {"benchmark", "eval", "evals", "golden", "judge", "metric", "metrics"},
@@ -158,7 +177,15 @@ CAPABILITY_PATH_HINTS: dict[str, set[str]] = {
     "python-api": {"api", "fastapi", "router", "routes", "server", "service"},
     "python-cli": {"cli", "command", "main", "typer", "click"},
     "node-ai-sdk": {"ai", "api", "chat", "completion", "generate", "openai", "sdk"},
-    "model-server-integration": {"client", "completion", "lmstudio", "model", "ollama", "server"},
+    "model-server-integration": {
+        "client",
+        "completion",
+        "lmstudio",
+        "model",
+        "ollama",
+        "responses",
+        "server",
+    },
 }
 CAPABILITY_STRONG_CONTENT: dict[str, set[str]] = {
     "data-table": {"@tanstack/react-table", "usereacttable", "columndef", "getrowmodel"},
@@ -203,26 +230,30 @@ CAPABILITY_STRONG_CONTENT: dict[str, set[str]] = {
         "@vercel/blob",
         "drive.files",
         "file.arraybuffer",
-        "formdata",
         "googleapis",
-        "multipart",
         "putobjectcommand",
         "s3client",
         "uploadfile",
     },
-    "email-webhooks": {"webhook", "email", "message", "mailbox"},
-    "background-jobs": {"cron", "queue", "worker", "schedule", "sync"},
-    "validation-schemas": {"z.object", "zod", "schema", "resolver"},
-    "admin-export": {"jspdf", "xlsx", "export", "report"},
-    "llm-harness": {"chat.completions", "response_format", "structured output", "tool_calls"},
+    "email-webhooks": {"inbound", "mailbox", "nodemailer", "resend", "webhook"},
+    "background-jobs": {"cron", "queue", "schedule", "worker"},
+    "validation-schemas": {"z.object", "zod", "zodresolver"},
+    "admin-export": {"jspdf", "xlsx"},
+    "llm-harness": {
+        "function_call",
+        "response_format",
+        "responses.create",
+        "structured output",
+        "tool_calls",
+    },
     "local-ai-integration": {"127.0.0.1:1234", "lm studio", "lmstudio", "ollama", "llama.cpp"},
     "rag-retrieval": {"embedding", "similarity_search", "vectorstore", "retriever", "chunk"},
     "eval-harness": {"golden", "metric", "expected", "judge", "eval"},
     "data-pipeline": {"duckdb", "polars", "pandas", "dataframe", "read_parquet"},
     "python-api": {"fastapi", "apirouter", "pydantic", "basemodel"},
     "python-cli": {"typer.app", "typer", "click.command", "argparse"},
-    "node-ai-sdk": {"streamtext", "generatetext", "@ai-sdk", "openai.chat"},
-    "model-server-integration": {"openai-compatible", "base_url", "models", "chat/completions"},
+    "node-ai-sdk": {"streamtext", "generatetext", "@ai-sdk", "toolcall"},
+    "model-server-integration": {"openai-compatible", "base_url", "models", "responses"},
 }
 
 CAPABILITY_DEPENDENCY_HINTS: dict[str, set[str]] = {
@@ -306,7 +337,7 @@ CAPABILITY_TERMS: dict[str, list[str]] = {
     "background-jobs": ["worker", "job", "cron", "schedule", "sync", "queue"],
     "validation-schemas": ["validation", "schema", "zod", "resolver"],
     "admin-export": ["export", "report", "pdf", "excel", "xlsx"],
-    "llm-harness": ["llm", "harness", "agent", "prompt", "structured output", "tool calling"],
+    "llm-harness": ["llm", "harness", "agent", "prompt", "responses", "structured output", "tool calling"],
     "local-ai-integration": ["local ai", "lm studio", "lmstudio", "ollama", "llama.cpp", "vllm"],
     "rag-retrieval": ["rag", "retrieval", "embedding", "vector", "semantic search", "chunk"],
     "eval-harness": ["eval", "evaluation", "benchmark", "golden", "judge", "metrics"],
@@ -321,6 +352,7 @@ CAPABILITY_TERMS: dict[str, list[str]] = {
         "lmstudio",
         "ollama",
         "base_url",
+        "responses",
     ],
 }
 
@@ -498,6 +530,10 @@ def _strong_content_hits(content: str, capability: str) -> int:
     return sum(1 for term in CAPABILITY_STRONG_CONTENT.get(capability, set()) if term in lowered)
 
 
+def _is_manifest_path(rel_path: str) -> bool:
+    return Path(rel_path).name in CONFIG_NAMES
+
+
 def _server_action_file_signal(rel_path: str, searchable: str) -> bool:
     path = rel_path.replace("\\", "/").lower()
     if '"use server"' in searchable or "'use server'" in searchable:
@@ -625,22 +661,24 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
     terms = terms_for_capability(normalized)
     dependencies, manifest_paths = _load_package_dependencies(snapshot_root)
     relevant_dependencies = sorted(name for name in dependencies if name in RELEVANT_DEPENDENCIES)
-    capability_dependencies = CAPABILITY_DEPENDENCY_HINTS.get(normalized, set()) & set(
+    capability_dependencies = CONCRETE_CAPABILITY_DEPENDENCIES.get(normalized, set()) & set(
         relevant_dependencies
     )
     dependency_paths = _dependency_paths(snapshot_root, manifest_paths)
 
-    scored_files: list[tuple[float, str, list[str], float, float]] = []
+    scored_files: list[tuple[float, str, list[str], float, float, bool, int, int, bool]] = []
     for path in collect_scan_files(snapshot_root):
         rel_path = _relative(snapshot_root, path)
         content = read_text(path)
         if content is None:
             continue
+        is_manifest = _is_manifest_path(rel_path)
         searchable = f"{rel_path}\n{content}".lower()
         term_hits = sum(min(searchable.count(term.lower()), 8) for term in terms)
         ui_score = _ui_path_score(rel_path, normalized)
         noise_penalty = _noise_penalty(rel_path, normalized)
         strong_hits = _strong_content_hits(searchable, normalized)
+        source_strong_hits = 0 if is_manifest else strong_hits
         capability_dependency_hits = sum(
             1 for dependency in capability_dependencies if dependency.lower() in searchable
         )
@@ -650,7 +688,13 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         if (
             normalized in AI_AND_DATA_CAPABILITIES
             and not path_signal
-            and strong_hits <= 0
+            and source_strong_hits <= 0
+            and capability_dependency_hits <= 0
+        ):
+            continue
+        if (
+            normalized in SOURCE_SUPPORT_REQUIRED_CAPABILITIES
+            and is_manifest
             and capability_dependency_hits <= 0
         ):
             continue
@@ -659,11 +703,11 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
             searchable,
         ):
             continue
-        score = float(term_hits) + (ui_score * 4) + (strong_hits * 3) + (
+        score = float(term_hits) + (ui_score * 4) + (source_strong_hits * 3) + (
             capability_dependency_hits * 2
         )
         if path.name == "package.json":
-            score += sum(1 for dep in relevant_dependencies if dep.lower() in searchable)
+            score += capability_dependency_hits * 2
         elif ui_score <= 0.2:
             score *= 0.45
         if noise_penalty >= 0.7:
@@ -674,22 +718,34 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         if not citations:
             line_count = max(1, min(80, len(content.splitlines())))
             citations = [f"{rel_path}:1-{line_count}"]
-        scored_files.append((round(score, 4), rel_path, citations, ui_score, noise_penalty))
+        scored_files.append(
+            (
+                round(score, 4),
+                rel_path,
+                citations,
+                ui_score,
+                noise_penalty,
+                path_signal,
+                source_strong_hits,
+                capability_dependency_hits,
+                is_manifest,
+            )
+        )
 
     scored_files.sort(key=lambda item: item[0], reverse=True)
     top_files = scored_files[:max_files]
     entry_paths = [
         path
-        for _, path, _, ui_score, noise_penalty in top_files
+        for _, path, _, ui_score, noise_penalty, _, _, _, _ in top_files
         if Path(path).suffix in ENTRY_EXTENSIONS and ui_score >= 0.35 and noise_penalty < 0.7
     ]
     evidence_paths: list[str] = []
-    for _, _, citations, _, _ in top_files:
+    for _, _, citations, _, _, _, _, _, _ in top_files:
         evidence_paths.extend(citations)
-    ui_scores = [ui_score for _, _, _, ui_score, _ in top_files if ui_score > 0]
+    ui_scores = [ui_score for _, _, _, ui_score, _, _, _, _, _ in top_files if ui_score > 0]
     avg_ui_path_score = sum(ui_scores) / len(ui_scores) if ui_scores else 0.0
     avg_noise_penalty = (
-        sum(noise_penalty for _, _, _, _, noise_penalty in top_files) / len(top_files)
+        sum(noise_penalty for _, _, _, _, noise_penalty, _, _, _, _ in top_files) / len(top_files)
         if top_files
         else 0.0
     )
@@ -697,6 +753,24 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         sum(1 for path in entry_paths if _capability_path_signal(path, normalized)) / len(entry_paths)
         if entry_paths
         else 0.0
+    )
+    capability_path_hit_count = sum(
+        1 for _, _, _, _, _, path_signal, _, _, is_manifest in top_files if path_signal and not is_manifest
+    )
+    source_strong_content_hit_count = sum(
+        strong_hits for _, _, _, _, _, _, strong_hits, _, is_manifest in top_files if not is_manifest
+    )
+    source_dependency_hit_count = sum(
+        dependency_hits
+        for _, _, _, _, _, _, _, dependency_hits, is_manifest in top_files
+        if not is_manifest
+    )
+    capability_dependency_hit_count = max(len(capability_dependencies), source_dependency_hit_count)
+    manifest_only = bool(top_files) and all(is_manifest for _, _, _, _, _, _, _, _, is_manifest in top_files)
+    generic_ui_only = bool(entry_paths) and (
+        capability_path_hit_count <= 0
+        and source_strong_content_hit_count <= 0
+        and capability_dependency_hit_count <= 0
     )
 
     adaptation_notes = ["Copy listed files, then adapt imports, routes, and project-specific data loading."]
@@ -731,7 +805,37 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
             "Carry over the Python package manifest and any settings models used by the cited files."
         )
 
-    dependency_bonus = min(0.2, len(relevant_dependencies) * 0.025)
+    synthesis = {
+        "adaptation_notes": adaptation_notes,
+        "match_terms": terms,
+        "ui_path_score": round(avg_ui_path_score, 4),
+        "noise_penalty": round(avg_noise_penalty, 4),
+        "capability_path_score": round(capability_path_score, 4),
+        "capability_path_hit_count": capability_path_hit_count,
+        "source_strong_content_hit_count": source_strong_content_hit_count,
+        "capability_dependency_hit_count": capability_dependency_hit_count,
+        "manifest_only": manifest_only,
+        "generic_ui_only": generic_ui_only,
+    }
+    capability_signal_score = _capability_label_signal_score(
+        normalized,
+        entry_paths + evidence_paths,
+        relevant_dependencies,
+        synthesis,
+    )
+    synthesis["capability_signal_score"] = capability_signal_score
+    if capability_signal_score < MIN_LABEL_SIGNAL:
+        evidence_paths = []
+    if (
+        normalized in SOURCE_SUPPORT_REQUIRED_CAPABILITIES
+        and capability_path_hit_count <= 0
+        and source_strong_content_hit_count <= 0
+    ):
+        evidence_paths = []
+    if not evidence_paths:
+        entry_paths = []
+
+    dependency_bonus = min(0.18, len(capability_dependencies) * 0.06)
     if normalized == "data-table" and "@tanstack/react-table" in relevant_dependencies:
         dependency_bonus += 0.18
     reuse_score = min(
@@ -747,6 +851,12 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         reuse_score = min(reuse_score, 0.35)
     if normalized == "data-table" and "@tanstack/react-table" not in relevant_dependencies:
         reuse_score = min(reuse_score, 0.82 if capability_path_score > 0 else 0.55)
+    if manifest_only:
+        reuse_score = min(reuse_score, MANIFEST_ONLY_SCORE_CAP)
+    if capability_signal_score < STRONG_LABEL_SIGNAL:
+        reuse_score = min(reuse_score, POSSIBLE_LABEL_SCORE_CAP)
+    elif not manifest_only:
+        reuse_score = max(reuse_score, 0.75)
 
     return {
         "capability": normalized,
@@ -755,13 +865,7 @@ def scan_snapshot(snapshot_root: Path, capability: str, max_files: int = 10) -> 
         "external_dependencies": relevant_dependencies,
         "evidence_paths": sorted(set(evidence_paths)),
         "reuse_score": round(reuse_score, 4) if evidence_paths else 0.0,
-        "synthesis": {
-            "adaptation_notes": adaptation_notes,
-            "match_terms": terms,
-            "ui_path_score": round(avg_ui_path_score, 4),
-            "noise_penalty": round(avg_noise_penalty, 4),
-            "capability_path_score": round(capability_path_score, 4),
-        },
+        "synthesis": synthesis,
     }
 
 

@@ -775,6 +775,19 @@ def _tool_observation_messages(
     completion: lmstudio.LMStudioChatCompletion,
     observations: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    if completion.output_items:
+        return [
+            *completion.output_items,
+            *[
+                {
+                    "type": "function_call_output",
+                    "call_id": str(observation.get("tool_call_id") or ""),
+                    "output": _tool_observation_content(observation),
+                }
+                for observation in observations
+                if observation.get("tool_call_id")
+            ],
+        ]
     assistant_message: dict[str, Any] = {
         "role": "assistant",
         "content": completion.content or None,
@@ -1713,14 +1726,15 @@ def _messages(asset: dict[str, Any], query: str) -> list[dict[str, str]]:
             "role": "system",
             "content": (
                 "You are FastContext, a read-only repository exploration subagent. "
-                "Never execute code and never suggest edits. Use the provided Read, Glob, and Grep "
-                "tools for evidence. Prefer primary source files over docs, examples, generated output, "
-                "build output, vendored code, and tests unless the task asks for those. Do not shorten "
-                "paths. On Windows, use relative paths like src/source_scout/server.py or exact paths "
-                "under the workspace root; never use shortened pseudo-absolute paths like "
-                "/source_scout/src/source_scout/server.py. Cite only files and exact line ranges that "
-                "came from successful tool observations. "
-                "If native tool calling is unavailable, request tools as JSON like "
+                "Outcome: return the smallest source evidence set Codex should inspect for the task; "
+                "do not decide, score, or prove candidate reuse. Use only Read, Glob, and Grep for "
+                "evidence. Never execute code and never suggest edits. Prefer primary source files "
+                "over docs, examples, generated output, build output, vendored code, and tests unless "
+                "the task asks for those. Use relative paths like src/source_scout/server.py or exact "
+                "paths under the workspace root; never shorten paths or use pseudo-absolute paths "
+                "like /source_scout/src/source_scout/server.py. Cite only exact line ranges from "
+                "successful tool observations. If native tool calling is unavailable, request tools "
+                "as JSON like "
                 '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
                 "After enough evidence is observed, stop calling tools and return final_answer. "
                 f"Return the smallest useful evidence set: 1-{MAX_FINAL_CITATIONS} citations, "
@@ -1780,23 +1794,20 @@ def _local_messages(
             "role": "system",
             "content": (
                 "You are FastContext, a read-only local repository exploration subagent. "
-                "Use the provided Read, Glob, and Grep tools. The user context includes the absolute "
-                "workspace root; do not shorten or invent paths. Treat seed_context.likely_source_files "
-                "as ordered and inspect the first relevant entries before broad search. Start broad only "
-                "when the ordered hints are insufficient, then narrow down. Treat seed_context.repo_map "
-                "and seed_context.repo_map_hints as generated navigation hints only; verify them with "
-                "Read, Glob, or Grep before citing. Use "
-                "seed_context.priority_file_matches as line anchors for Read offsets before "
-                "reading module headers. Prefer primary "
-                "source tree files over docs, generated output, build output, "
-                "vendored code, samples, and fixtures unless seed_context.task_type says the task asks "
-                "for tests, evals, fixtures, docs, CLI, or MCP. If the task names "
-                "a file, inspect that exact file first. On Windows, use relative paths like "
-                "src/source_scout/server.py or exact paths under the workspace root; never use shortened "
-                "pseudo-absolute paths like /source_scout/src/source_scout/server.py. Cite only files and "
-                "exact line ranges that appeared in successful tool observations. If native tool calling "
-                "is unavailable, request tools "
-                "as JSON like "
+                "Outcome: return the smallest source evidence set Codex should inspect before editing. "
+                "Use only Read, Glob, and Grep; never execute code and never suggest edits. "
+                "Treat seed_context.likely_source_files as ordered and inspect the first relevant "
+                "entries before broad search. Start broad only when ordered hints are insufficient. "
+                "Treat seed_context.repo_map and repo_map_hints as generated navigation hints; verify "
+                "them with Read, Glob, or Grep before citing. Use seed_context.priority_file_matches "
+                "as Read line anchors when present. Prefer primary source tree files over docs, "
+                "generated output, build output, vendored code, samples, and fixtures unless "
+                "seed_context.task_type says the task asks for tests, evals, fixtures, docs, CLI, or MCP. "
+                "If the task names a file, inspect that exact file first. Use relative paths like "
+                "src/source_scout/server.py or exact paths under the workspace root; never shorten paths "
+                "or use pseudo-absolute paths like /source_scout/src/source_scout/server.py. Cite only "
+                "exact line ranges from successful tool observations. If native tool calling is "
+                "unavailable, request tools as JSON like "
                 '{"tool_calls":[{"tool":"Grep","args":{"pattern":"symbol","glob":"**/*.ts"}}]}. '
                 "After enough evidence is observed, stop calling tools and return final_answer. "
                 f"Return the smallest useful evidence set: 1-{MAX_FINAL_CITATIONS} citations, "

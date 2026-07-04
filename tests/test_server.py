@@ -23,7 +23,7 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
             task=task,
             project_path=str(tmp_path),
             model_id="fastcontext-1.0-4b-rl",
-            prompt_version="fastcontext-refine-v1",
+            prompt_version="fastcontext-refine-v2",
             schema_version="fastcontext-evidence-v1",
             analyzer_version="fastcontext-harness-v1",
             status="completed",
@@ -34,11 +34,11 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
 
     monkeypatch.setattr(server.fastcontext, "explore_local_project", fake_explore_local_project)
 
-    tools = await server.mcp.get_tools()
+    tools = {tool.name: tool for tool in await server.mcp.list_tools()}
     assert "explore_local_code" in tools
     assert tools["explore_local_code"].annotations.readOnlyHint is True
 
-    result = await server.explore_local_code.fn(
+    result = await server.explore_local_code(
         "Find MCP tools",
         str(tmp_path),
         max_turns=2,
@@ -75,11 +75,11 @@ async def test_assess_reusable_code_tool_is_registered_and_returns_cli_shape(
         },
     )
 
-    tools = await server.mcp.get_tools()
+    tools = {tool.name: tool for tool in await server.mcp.list_tools()}
     assert "assess_reusable_code" in tools
     assert not bool(getattr(tools["assess_reusable_code"].annotations, "readOnlyHint", False))
 
-    result = await server.assess_reusable_code.fn(
+    result = await server.assess_reusable_code(
         "asset-1",
         "Find a reusable route handler",
         fastcontext_policy="never",
@@ -106,17 +106,17 @@ async def test_assess_reusable_code_tool_is_registered_and_returns_cli_shape(
 @pytest.mark.asyncio
 async def test_assess_reusable_code_validates_task_policy_and_round_limit() -> None:
     with pytest.raises(ToolError, match="Task description is required"):
-        await server.assess_reusable_code.fn("asset-1", "")
+        await server.assess_reusable_code("asset-1", "")
 
     with pytest.raises(ToolError, match="fastcontext_policy must be one of"):
-        await server.assess_reusable_code.fn(
+        await server.assess_reusable_code(
             "asset-1",
             "Find reusable code",
             fastcontext_policy="sometimes",
         )
 
     with pytest.raises(ToolError, match="max_evidence_rounds must be between 0 and 2"):
-        await server.assess_reusable_code.fn(
+        await server.assess_reusable_code(
             "asset-1",
             "Find reusable code",
             max_evidence_rounds=3,
@@ -133,7 +133,7 @@ async def test_assess_reusable_code_converts_assessor_errors_to_tool_error(
     monkeypatch.setattr(server.assessor, "assess_candidate", fake_assess_candidate)
 
     with pytest.raises(ToolError, match="Unknown candidate_id"):
-        await server.assess_reusable_code.fn("missing", "Find reusable code")
+        await server.assess_reusable_code("missing", "Find reusable code")
 
 
 def _create_reusable_asset(tmp_path: Path) -> str:
@@ -188,19 +188,19 @@ def _create_reusable_asset(tmp_path: Path) -> str:
 async def test_reuse_tools_carry_task_signature_and_record_outcomes(tmp_path: Path) -> None:
     asset_id = _create_reusable_asset(tmp_path)
 
-    result = await server.find_reusable_code.fn("Find a reusable data table", max_repos=1)
+    result = await server.find_reusable_code("Find a reusable data table", max_repos=1)
 
     assert result.task_signature == catalog.task_signature("Find a reusable data table")
     assert result.results[0].candidate_id == asset_id
     assert result.results[0].task_signature == result.task_signature
     assert "get_source_bundle(candidate_id, task_signature)" in result.next_steps[0]
 
-    bundle = await server.get_source_bundle.fn(asset_id, result.task_signature)
+    bundle = await server.get_source_bundle(asset_id, result.task_signature)
     manifest = json.loads(Path(bundle.manifest_path).read_text(encoding="utf-8"))
     assert bundle.task_signature == result.task_signature
     assert manifest["task_signature"] == result.task_signature
 
-    recorded = await server.record_reuse_outcome.fn(
+    recorded = await server.record_reuse_outcome(
         asset_id,
         result.task_signature,
         "selected",
@@ -228,7 +228,7 @@ async def test_reuse_tools_require_task_signature(tmp_path: Path) -> None:
     asset_id = _create_reusable_asset(tmp_path)
 
     with pytest.raises(ToolError, match="task_signature is required"):
-        await server.get_source_bundle.fn(asset_id, "")
+        await server.get_source_bundle(asset_id, "")
 
     with pytest.raises(ToolError, match="task_signature is required"):
-        await server.record_reuse_outcome.fn(asset_id, "", "selected")
+        await server.record_reuse_outcome(asset_id, "", "selected")

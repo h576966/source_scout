@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from source_scout import catalog, fastcontext, lmstudio
-from tests.fastcontext_helpers import _create_candidate, _payload_message_text
+from tests.fastcontext_helpers import _create_candidate, _payload_message_text, _response_message_json
 
 
 @pytest.mark.asyncio
@@ -21,63 +21,51 @@ async def test_refine_candidate_stores_fastcontext_evidence(tmp_path: Path) -> N
                 200,
                 json={"data": [{"id": lmstudio.DEFAULT_FASTCONTEXT_MODEL}]},
             )
-        assert request.url.path == "/v1/chat/completions"
+        assert request.url.path == "/v1/responses"
         chat_calls += 1
         payload = json.loads(request.content)
         assert payload["model"] == lmstudio.DEFAULT_FASTCONTEXT_MODEL
         if chat_calls == 1:
             return httpx.Response(
                 200,
-                json={
-                    "choices": [
+                json=_response_message_json(
+                    json.dumps(
                         {
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "tool_calls": [
-                                            {
-                                                "tool": "GREP",
-                                                "args": {
-                                                    "pattern": "useReactTable",
-                                                    "glob": "**/*.tsx",
-                                                },
-                                            }
-                                        ]
-                                    }
-                                )
-                            }
+                            "tool_calls": [
+                                {
+                                    "tool": "GREP",
+                                    "args": {
+                                        "pattern": "useReactTable",
+                                        "glob": "**/*.tsx",
+                                    },
+                                }
+                            ]
                         }
-                    ]
-                },
+                    )
+                ),
             )
 
         assert "src/components/data-table.tsx" in _payload_message_text(payload)
         assert "tools" not in payload
         return httpx.Response(
             200,
-            json={
-                "choices": [
+            json=_response_message_json(
+                json.dumps(
                     {
-                        "message": {
-                            "content": json.dumps(
+                        "final_answer": {
+                            "evidence": [
                                 {
-                                    "final_answer": {
-                                        "evidence": [
-                                            {
-                                                "path": "src/components/data-table.tsx",
-                                                "start_line": 1,
-                                                "end_line": 4,
-                                                "reason": "TanStack table implementation",
-                                            }
-                                        ],
-                                        "notes": ["Reusable table component"],
-                                    }
+                                    "path": "src/components/data-table.tsx",
+                                    "start_line": 1,
+                                    "end_line": 4,
+                                    "reason": "TanStack table implementation",
                                 }
-                            )
+                            ],
+                            "notes": ["Reusable table component"],
                         }
                     }
-                ]
-            },
+                )
+            ),
         )
 
     result = await fastcontext.refine_candidate(
@@ -123,61 +111,49 @@ async def test_refine_candidate_stores_parent_task_signature(tmp_path: Path) -> 
                 200,
                 json={"data": [{"id": lmstudio.DEFAULT_FASTCONTEXT_MODEL}]},
             )
-        assert request.url.path == "/v1/chat/completions"
+        assert request.url.path == "/v1/responses"
         chat_calls += 1
         if chat_calls == 1:
             return httpx.Response(
                 200,
-                json={
-                    "choices": [
+                json=_response_message_json(
+                    json.dumps(
                         {
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "tool_calls": [
-                                            {
-                                                "tool": "READ",
-                                                "args": {
-                                                    "path": "src/components/data-table.tsx",
-                                                    "offset": 1,
-                                                    "limit": 20,
-                                                },
-                                            }
-                                        ]
-                                    }
-                                )
-                            }
+                            "tool_calls": [
+                                {
+                                    "tool": "READ",
+                                    "args": {
+                                        "path": "src/components/data-table.tsx",
+                                        "offset": 1,
+                                        "limit": 20,
+                                    },
+                                }
+                            ]
                         }
-                    ]
-                },
+                    )
+                ),
             )
         payload = json.loads(request.content)
         assert "src/components/data-table.tsx" in _payload_message_text(payload)
         return httpx.Response(
             200,
-            json={
-                "choices": [
+            json=_response_message_json(
+                json.dumps(
                     {
-                        "message": {
-                            "content": json.dumps(
+                        "final_answer": {
+                            "evidence": [
                                 {
-                                    "final_answer": {
-                                        "evidence": [
-                                            {
-                                                "path": "src/components/data-table.tsx",
-                                                "start_line": 1,
-                                                "end_line": 4,
-                                                "reason": "TanStack table implementation",
-                                            }
-                                        ],
-                                        "notes": [],
-                                    }
+                                    "path": "src/components/data-table.tsx",
+                                    "start_line": 1,
+                                    "end_line": 4,
+                                    "reason": "TanStack table implementation",
                                 }
-                            )
+                            ],
+                            "notes": [],
                         }
                     }
-                ]
-            },
+                )
+            ),
         )
 
     result = await fastcontext.refine_candidate(

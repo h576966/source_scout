@@ -17,7 +17,7 @@ from .models import (
     ReuseAssessmentResult,
 )
 
-PROMPT_VERSION = "gemma-reuse-assessor-v2"
+PROMPT_VERSION = "gemma-reuse-assessor-v3"
 SCHEMA_VERSION = "reuse-assessment-v2"
 ANALYZER_VERSION = "gemma-reuse-assessor-v2"
 _EVIDENCE_IDS_SCHEMA = {
@@ -668,17 +668,22 @@ def _assessment_messages(context: Mapping[str, Any]) -> list[dict[str, str]]:
         {
             "role": "system",
             "content": (
-                "You assess whether a repository candidate contains reusable source for a task. "
-                "Return only valid JSON. You do not have tools. Use only the provided evidence "
-                "ledger IDs for source-specific claims. License metadata is passive context only; "
-                "do not score, reject, or downgrade the candidate because of license status. "
-                "Do not output reuse_score or final score."
+                "Assess whether the candidate contains reusable source for the task. "
+                "Outcome: recommend select, inspect, reject, or insufficient_evidence with "
+                "evidence-backed reasons and adaptation steps. Return only valid JSON matching "
+                "the requested schema. You do not have tools; use only the provided context. "
+                "Every source-specific claim must cite allowed evidence_ledger IDs, and IDs must "
+                "come from allowed_evidence_ids exactly. Use [] for claims that are not tied to "
+                "a source snippet. License metadata is passive context only; do not score, reject, "
+                "or downgrade because of license status. Do not output reuse_score or a final score."
             ),
         },
         {
             "role": "user",
             "content": (
-                "Assess this candidate using only the JSON context below.\n\n"
+                "Assess this candidate using only the JSON context below. Prefer concise findings "
+                "over exhaustive narration, and request missing evidence only when it would change "
+                "the verdict.\n\n"
                 f"Context JSON:\n{json.dumps(context['prompt_payload'], sort_keys=True)}\n\n"
                 "Return exactly this JSON object shape:\n"
                 "{\n"

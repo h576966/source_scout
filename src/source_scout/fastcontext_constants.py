@@ -1,4 +1,4 @@
-PROMPT_VERSION = "fastcontext-refine-v1"
+PROMPT_VERSION = "fastcontext-refine-v2"
 SCHEMA_VERSION = "fastcontext-evidence-v1"
 ANALYZER_VERSION = "fastcontext-harness-v1"
 

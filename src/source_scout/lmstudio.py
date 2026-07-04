@@ -3,11 +3,12 @@ import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from openai import APIError, APIStatusError, AsyncOpenAI
 
 DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1"
 DEFAULT_GEMMA_MODEL = "google/gemma-4-12b-qat"
@@ -48,6 +49,8 @@ class LMStudioChatCompletion:
     finish_reason: str | None
     message: dict[str, Any]
     raw: dict[str, Any]
+    output_items: list[dict[str, Any]] = field(default_factory=list)
+    response_id: str | None = None
 
 
 def get_config() -> LMStudioConfig:
@@ -309,7 +312,7 @@ async def chat_json(
             last_error = exc
     if last_error is not None:
         raise last_error
-    raise LMStudioError("LM Studio chat completion failed.")
+    raise LMStudioError("LM Studio response failed.")
 
 
 async def chat_text(
@@ -333,7 +336,7 @@ async def chat_text(
         seed=seed,
     )
     if not completion.content.strip():
-        raise LMStudioError("LM Studio returned an empty chat completion.")
+        raise LMStudioError("LM Studio returned an empty response.")
     return completion.content
 
 
@@ -353,77 +356,201 @@ async def chat_completion(
     active = config or get_config()
     payload: dict[str, Any] = {
         "model": model_id,
-        "messages": messages,
+        "input": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_output_tokens": max_tokens,
     }
     if response_format is not None:
-        payload["response_format"] = response_format
+        payload["text"] = {"format": _responses_text_format(response_format)}
     if tools is not None:
-        payload["tools"] = tools
+        payload["tools"] = _responses_tools(tools)
     if tool_choice is not None:
-        payload["tool_choice"] = tool_choice
+        payload["tool_choice"] = _responses_tool_choice(tool_choice)
+    request_extra_body = dict(extra_body or {})
     if seed is not None:
-        payload["seed"] = seed
-    if extra_body is not None:
-        payload.update(extra_body)
+        request_extra_body["seed"] = seed
 
     try:
-        async with httpx.AsyncClient(timeout=active.timeout_seconds, transport=transport) as client:
-            response = await client.post(f"{active.base_url}/chat/completions", json=payload)
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
+        async with _openai_client(active, transport) as client:
+            response = await client.responses.create(
+                **payload,
+                extra_body=request_extra_body or None,
+            )
+    except APIStatusError as exc:
         detail = exc.response.text.strip()
         suffix = f" Response: {detail[:500]}" if detail else ""
         raise LMStudioError(
-            f"LM Studio chat completion failed for model '{model_id}'.{suffix}"
+            f"LM Studio response failed for model '{model_id}'.{suffix}"
         ) from exc
-    except httpx.HTTPError as exc:
-        raise LMStudioError(f"LM Studio chat completion failed for model '{model_id}'.") from exc
+    except APIError as exc:
+        raise LMStudioError(f"LM Studio response failed for model '{model_id}'.") from exc
 
-    data = response.json()
-    return _extract_chat_completion(data)
+    return _extract_response_completion(response.model_dump(mode="json"))
+
+
+def _openai_client(
+    config: LMStudioConfig,
+    transport: httpx.AsyncBaseTransport | None,
+) -> AsyncOpenAI:
+    http_client = httpx.AsyncClient(timeout=config.timeout_seconds, transport=transport)
+    return AsyncOpenAI(
+        base_url=config.base_url,
+        api_key=os.environ.get("LM_STUDIO_API_KEY", "lm-studio"),
+        timeout=config.timeout_seconds,
+        max_retries=0,
+        http_client=http_client,
+    )
+
+
+def _responses_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
+    if response_format.get("type") != "json_schema":
+        return dict(response_format)
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return dict(response_format)
+    return {"type": "json_schema", **json_schema}
+
+
+def _responses_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        function = tool.get("function")
+        if tool.get("type") == "function" and isinstance(function, dict):
+            converted_tool: dict[str, Any] = {
+                "type": "function",
+                "name": str(function.get("name", "")),
+            }
+            for key in ("description", "parameters", "strict"):
+                if key in function:
+                    converted_tool[key] = function[key]
+            converted.append(converted_tool)
+        else:
+            converted.append(dict(tool))
+    return converted
+
+
+def _responses_tool_choice(tool_choice: str | dict[str, Any]) -> str | dict[str, Any]:
+    if not isinstance(tool_choice, dict):
+        return tool_choice
+    function = tool_choice.get("function")
+    if tool_choice.get("type") == "function" and isinstance(function, dict):
+        name = function.get("name")
+        if isinstance(name, str) and name:
+            return {"type": "function", "name": name}
+    return dict(tool_choice)
+
+
+def _extract_response_completion(data: dict[str, Any]) -> LMStudioChatCompletion:
+    if "choices" in data and not data.get("output"):
+        return _extract_chat_completion(data)
+    output_items = _response_output_items(data)
+    content_text = _response_output_text(output_items)
+    tool_calls = _extract_response_tool_calls(output_items)
+    finish_reason = "tool_calls" if tool_calls else _response_finish_reason(data)
+    message = {
+        "role": "assistant",
+        "content": content_text or None,
+        "tool_calls": [call.raw for call in tool_calls],
+    }
+    return LMStudioChatCompletion(
+        content=content_text,
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
+        message=message,
+        raw=data,
+        output_items=output_items,
+        response_id=str(data["id"]) if data.get("id") else None,
+    )
+
+
+def _response_output_items(data: dict[str, Any]) -> list[dict[str, Any]]:
+    output = data.get("output")
+    if not isinstance(output, list):
+        raise LMStudioError("LM Studio returned no response output items.")
+    return [item for item in output if isinstance(item, dict)]
+
+
+def _response_output_text(output_items: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for item in output_items:
+        if item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+            continue
+        if not isinstance(content, list):
+            continue
+        for content_item in content:
+            if not isinstance(content_item, dict):
+                continue
+            text = content_item.get("text")
+            if content_item.get("type") in {"output_text", "text"} and isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
+def _extract_response_tool_calls(output_items: list[dict[str, Any]]) -> list[LMStudioToolCall]:
+    calls: list[LMStudioToolCall] = []
+    for index, item in enumerate(output_items):
+        if item.get("type") != "function_call":
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        arguments, arguments_error = _parse_tool_arguments(item.get("arguments"))
+        call_id = item.get("call_id") or item.get("id")
+        calls.append(
+            LMStudioToolCall(
+                id=str(call_id or f"tool-call-{index + 1}"),
+                name=name,
+                arguments=arguments,
+                raw=item,
+                arguments_error=arguments_error,
+            )
+        )
+    return calls
+
+
+def _response_finish_reason(data: dict[str, Any]) -> str | None:
+    status = data.get("status")
+    if isinstance(status, str) and status:
+        return status
+    incomplete_details = data.get("incomplete_details")
+    if isinstance(incomplete_details, dict):
+        reason = incomplete_details.get("reason")
+        if isinstance(reason, str) and reason:
+            return reason
+    return None
 
 
 def _extract_chat_completion(data: dict[str, Any]) -> LMStudioChatCompletion:
-    choice = _first_choice(data)
-    message = choice.get("message")
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise LMStudioError("LM Studio returned no legacy chat-compatible choices.")
+    first = choices[0]
+    if not isinstance(first, dict):
+        raise LMStudioError("LM Studio returned an invalid legacy chat-compatible choice.")
+    message = first.get("message")
     if not isinstance(message, dict):
-        raise LMStudioError("LM Studio returned an invalid chat completion message.")
+        raise LMStudioError("LM Studio returned an invalid legacy chat-compatible message.")
     content = message.get("content")
     if content is None:
         content_text = ""
     elif isinstance(content, str):
         content_text = content
     else:
-        raise LMStudioError("LM Studio returned non-text chat completion content.")
+        raise LMStudioError("LM Studio returned non-text legacy chat-compatible content.")
     return LMStudioChatCompletion(
         content=content_text,
-        tool_calls=_extract_tool_calls(message),
-        finish_reason=str(choice["finish_reason"]) if choice.get("finish_reason") is not None else None,
+        tool_calls=_extract_chat_tool_calls(message),
+        finish_reason=str(first["finish_reason"]) if first.get("finish_reason") is not None else None,
         message=message,
         raw=data,
     )
 
 
-def _extract_message_content(data: dict[str, Any]) -> str:
-    content = _extract_chat_completion(data).content
-    if not content.strip():
-        raise LMStudioError("LM Studio returned an empty chat completion.")
-    return content
-
-
-def _first_choice(data: dict[str, Any]) -> dict[str, Any]:
-    choices = data.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise LMStudioError("LM Studio returned no chat completion choices.")
-    first = choices[0]
-    if not isinstance(first, dict):
-        raise LMStudioError("LM Studio returned an invalid chat completion choice.")
-    return first
-
-
-def _extract_tool_calls(message: dict[str, Any]) -> list[LMStudioToolCall]:
+def _extract_chat_tool_calls(message: dict[str, Any]) -> list[LMStudioToolCall]:
     raw_calls = message.get("tool_calls")
     if not isinstance(raw_calls, list):
         return []

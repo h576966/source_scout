@@ -3,7 +3,7 @@ from typing import Any
 
 from . import catalog, lmstudio
 
-PROMPT_VERSION = "gemma-repo-card-v2"
+PROMPT_VERSION = "gemma-repo-card-v3"
 PROFILE_SCHEMA_VERSION = "gemma-profile-v2"
 ALLOWED_REPOSITORY_TYPES = {
     "library",
@@ -80,16 +80,19 @@ def _profile_messages(card: dict[str, Any]) -> list[dict[str, str]]:
         {
             "role": "system",
             "content": (
-                "You profile public GitHub repositories for reusable TypeScript, "
-                "JavaScript, Python, AI, data, and web application source. Return "
-                "only valid JSON. Be conservative and do not claim capabilities "
-                "without structural evidence."
+                "Profile public GitHub repositories for reusable TypeScript, JavaScript, "
+                "Python, AI, data, and web application source. Outcome: a compact reuse "
+                "profile with conservative capability labels, 0-1 quality scores, and "
+                "short evidence strings from paths, manifests, stack signals, or deterministic "
+                "features. Use only the RepositoryCard JSON. Prefer structural evidence over "
+                "README claims. Return only valid JSON matching the requested schema."
             ),
         },
         {
             "role": "user",
             "content": (
-                "Profile this repository card for reuse.\n\n"
+                "Profile this repository card for reuse. Keep concerns and evidence brief; "
+                "set needs_fastcontext=true when structural signals are too thin to trust.\n\n"
                 f"RepositoryCard JSON:\n{json.dumps(compact_card, sort_keys=True)}\n\n"
                 "Return exactly this JSON object shape:\n"
                 "{\n"

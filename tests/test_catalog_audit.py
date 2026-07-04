@@ -260,11 +260,27 @@ def test_catalog_audit_downloaded_uses_current_snapshot_path_fallback(tmp_path: 
 
 
 def test_catalog_audit_capability_tiers_and_explosion_review_labels(tmp_path: Path) -> None:
-    repo_id = _store_repo(tmp_path, "broad", profile=_profile(), asset_score=0.9)
-    _add_asset(repo_id, "forms", reuse_score=0.55, synthesis={"noise_penalty": 0.1})
+    repo_id = _store_repo(
+        tmp_path,
+        "broad",
+        profile=_profile(),
+        asset_score=0.9,
+        asset_synthesis={"noise_penalty": 0.0, "capability_signal_score": 0.8},
+    )
+    _add_asset(
+        repo_id,
+        "forms",
+        reuse_score=0.55,
+        synthesis={"noise_penalty": 0.1, "capability_signal_score": 0.3},
+    )
     _add_asset(repo_id, "settings", reuse_score=0.95, evidence_paths=[], synthesis={"noise_penalty": 0.0})
     for index in range(12):
-        _add_asset(repo_id, f"strong-{index}", reuse_score=0.9, synthesis={"noise_penalty": 0.0})
+        _add_asset(
+            repo_id,
+            f"strong-{index}",
+            reuse_score=0.9,
+            synthesis={"noise_penalty": 0.0, "capability_signal_score": 0.8},
+        )
 
     report = catalog_audit.audit_catalog(bucket="noisy", now=FIXED_NOW)
     [item] = report["buckets"]["noisy"]
@@ -279,6 +295,33 @@ def test_catalog_audit_capability_tiers_and_explosion_review_labels(tmp_path: Pa
     assert any(reason.startswith("capability explosion:") for reason in item["reasons"])
     assert report["summary"]["discard_candidates"] == 0
     assert _repo_ids(report["recommendations"]["keep"]) == {repo_id}
+
+
+def test_catalog_audit_weak_legacy_label_does_not_count_toward_explosion(tmp_path: Path) -> None:
+    repo_id = _store_repo(tmp_path, "legacy", profile=_profile(), asset_score=None)
+    for index in range(24):
+        _add_asset(
+            repo_id,
+            f"legacy-{index}",
+            reuse_score=0.95,
+            synthesis={"noise_penalty": 0.0},
+        )
+    _add_asset(
+        repo_id,
+        "data-table",
+        reuse_score=0.8,
+        synthesis={"noise_penalty": 0.0, "capability_signal_score": 0.8},
+    )
+
+    report = catalog_audit.audit_catalog(now=FIXED_NOW)
+    [item] = report["recommendations"]["keep"]
+
+    assert item["repo_id"] == repo_id
+    assert item["capability_counts"]["strong"] == 1
+    assert item["capability_counts"]["weak_noisy"] == 24
+    assert item["capability_counts"]["actionable"] == 1
+    assert item["recommended_action"] == "keep"
+    assert not any(reason.startswith("capability explosion:") for reason in item["reasons"])
 
 
 def test_catalog_audit_cli_prints_json(tmp_path: Path, monkeypatch, capsys) -> None:

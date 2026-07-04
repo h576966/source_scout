@@ -44,6 +44,58 @@ COMMAND_PALETTE_DEPENDENCIES = {
     "cmdk",
     "react-aria-components",
 }
+CONCRETE_CAPABILITY_DEPENDENCIES = {
+    "data-table": {"@tanstack/react-table"},
+    "command-palette": {"cmdk"},
+    "auth-ui": {"next-auth"},
+    "forms": {"@hookform/resolvers", "react-hook-form", "zod"},
+    "file-upload": {"react-dropzone", "uploadthing"},
+    "charts": {"recharts"},
+    "trpc-router": {"@trpc/server"},
+    "data-access": {"@prisma/client", "drizzle-orm", "prisma"},
+    "file-storage": {
+        "@aws-sdk/client-s3",
+        "@vercel/blob",
+        "firebase",
+        "googleapis",
+        "react-dropzone",
+        "uploadthing",
+    },
+    "email-webhooks": {"nodemailer", "resend"},
+    "validation-schemas": {"@hookform/resolvers", "zod"},
+    "admin-export": {"jspdf", "xlsx"},
+    "llm-harness": {
+        "@ai-sdk/openai",
+        "@ai-sdk/react",
+        "ai",
+        "anthropic",
+        "instructor",
+        "litellm",
+        "openai",
+    },
+    "local-ai-integration": {"openai"},
+    "rag-retrieval": {
+        "@langchain/core",
+        "chromadb",
+        "langchain",
+        "llama-index",
+        "qdrant-client",
+        "sentence-transformers",
+    },
+    "eval-harness": {"pytest"},
+    "data-pipeline": {"duckdb", "pandas", "polars"},
+    "python-api": {"fastapi", "pydantic"},
+    "python-cli": {"click", "typer"},
+    "node-ai-sdk": {
+        "@ai-sdk/anthropic",
+        "@ai-sdk/openai",
+        "@ai-sdk/react",
+        "ai",
+        "anthropic",
+        "openai",
+    },
+    "model-server-integration": {"openai"},
+}
 BACKEND_PATH_PARTS = {
     "actions",
     "api",
@@ -86,10 +138,10 @@ BACKEND_CAPABILITY_PATH_TERMS = {
         "upload",
         "uploads",
     },
-    "email-webhooks": {"email", "webhook", "webhooks", "message", "handler"},
+    "email-webhooks": {"inbound", "mailbox", "nodemailer", "resend", "webhook", "webhooks"},
     "background-jobs": {"cron", "inngest", "job", "jobs", "processor", "queue", "sync", "worker"},
     "validation-schemas": {"schema", "schemas", "validation", "zod", "resolver"},
-    "admin-export": {"export", "pdf", "report", "reports", "xlsx", "excel"},
+    "admin-export": {"excel", "export", "exports", "pdf", "xlsx"},
 }
 AI_DATA_PATH_PARTS = {
     "agents",
@@ -114,7 +166,7 @@ AI_DATA_PATH_PARTS = {
     "tools",
 }
 AI_DATA_CAPABILITY_PATH_TERMS = {
-    "llm-harness": {"agent", "agents", "chat", "completion", "harness", "llm", "prompt"},
+    "llm-harness": {"agent", "agents", "chat", "completion", "harness", "llm", "prompt", "responses"},
     "local-ai-integration": {"llama", "lmstudio", "local", "ollama", "server", "vllm"},
     "rag-retrieval": {"chunk", "embed", "embedding", "index", "rag", "retrieval", "vector"},
     "eval-harness": {"benchmark", "eval", "evals", "grade", "judge", "metric", "test"},
@@ -122,7 +174,15 @@ AI_DATA_CAPABILITY_PATH_TERMS = {
     "python-api": {"api", "fastapi", "router", "routes", "server", "service"},
     "python-cli": {"cli", "command", "main", "typer", "click"},
     "node-ai-sdk": {"ai", "api", "chat", "completion", "generate", "openai", "sdk"},
-    "model-server-integration": {"client", "completion", "lmstudio", "model", "ollama", "server"},
+    "model-server-integration": {
+        "client",
+        "completion",
+        "lmstudio",
+        "model",
+        "ollama",
+        "responses",
+        "server",
+    },
 }
 CAPABILITY_PATH_TERMS = BACKEND_CAPABILITY_PATH_TERMS | AI_DATA_CAPABILITY_PATH_TERMS
 BACKGROUND_JOB_STRONG_TERMS = {
@@ -169,6 +229,7 @@ CAPABILITY_INTENT_HINTS = {
         "mocked model",
         "mocked responses",
         "prompt",
+        "responses",
         "structured llm",
         "structured output",
         "structured output tests",
@@ -212,7 +273,7 @@ CAPABILITY_INTENT_HINTS = {
         "ai route",
         "ai sdk",
         "anthropic",
-        "chat api",
+        "responses api",
         "openai",
         "streaming",
         "streaming chat",
@@ -227,5 +288,6 @@ CAPABILITY_INTENT_HINTS = {
         "openai-compatible",
         "lm studio",
         "ollama",
+        "responses",
     },
 }

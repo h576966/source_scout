@@ -90,6 +90,111 @@ def _write_python_ai_fixture(root: Path) -> None:
     )
 
 
+def _write_trpc_fixture(root: Path) -> None:
+    (root / "src" / "server" / "trpc").mkdir(parents=True)
+    (root / "src" / "server" / "trpc" / "router.ts").write_text(
+        "\n".join(
+            [
+                "import { initTRPC } from '@trpc/server'",
+                "const t = initTRPC.create()",
+                "export const appRouter = t.router({",
+                "  health: t.procedure.query(() => 'ok'),",
+                "})",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (root / "package.json").write_text(
+        json.dumps({"dependencies": {"@trpc/server": "11.0.0", "next": "15.0.0"}}),
+        encoding="utf-8",
+    )
+
+
+def _write_command_palette_fixture(root: Path) -> None:
+    (root / "components" / "ui").mkdir(parents=True)
+    (root / "components" / "ui" / "command.tsx").write_text(
+        "\n".join(
+            [
+                "import { CommandDialog, CommandInput } from 'cmdk'",
+                "export function CommandPalette() {",
+                "  return <CommandDialog><CommandInput /></CommandDialog>",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (root / "package.json").write_text(
+        json.dumps({"dependencies": {"cmdk": "1.0.0", "next": "15.0.0", "react": "19.0.0"}}),
+        encoding="utf-8",
+    )
+
+
+def _write_admin_export_fixture(root: Path) -> None:
+    (root / "src" / "lib" / "export").mkdir(parents=True)
+    (root / "src" / "lib" / "export" / "pdf.ts").write_text(
+        "\n".join(
+            [
+                "import jsPDF from 'jspdf'",
+                "export function exportInvoicePdf(rows: string[]) {",
+                "  const doc = new jsPDF()",
+                "  doc.save('invoice.pdf')",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (root / "package.json").write_text(
+        json.dumps({"dependencies": {"jspdf": "2.5.0", "next": "15.0.0"}}),
+        encoding="utf-8",
+    )
+
+
+def _write_background_job_fixture(root: Path) -> None:
+    (root / "worker" / "src").mkdir(parents=True)
+    (root / "worker" / "src" / "queue.ts").write_text(
+        "\n".join(
+            [
+                "export async function runScheduledQueue() {",
+                "  await processQueue()",
+                "}",
+                "async function processQueue() { return 'done' }",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (root / "package.json").write_text(
+        json.dumps({"dependencies": {"next": "15.0.0", "react": "19.0.0"}}),
+        encoding="utf-8",
+    )
+
+
+def _write_generic_admin_fixture(root: Path) -> None:
+    (root / "src" / "app" / "admin").mkdir(parents=True)
+    (root / "src" / "app" / "admin" / "page.tsx").write_text(
+        "\n".join(
+            [
+                "export default function AdminPage() {",
+                "  return <main><h1>Dashboard</h1><p>Manage staff and reports</p></main>",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (root / "package.json").write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "@trpc/server": "11.0.0",
+                    "jspdf": "2.5.0",
+                    "next": "15.0.0",
+                    "react": "19.0.0",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _profile(capability_name: str, evidence_paths: list[str], confidence: float = 0.9) -> dict:
     return {
         "schema_version": "gemma-profile-v2",
@@ -420,6 +525,55 @@ def test_evidence_scan_returns_python_ai_assets(tmp_path: Path) -> None:
     assert result["reuse_score"] > 0
 
 
+def test_evidence_scan_rejects_generic_admin_for_noisy_backend_labels(tmp_path: Path) -> None:
+    _write_generic_admin_fixture(tmp_path)
+
+    for capability in ("trpc-router", "email-webhooks", "admin-export"):
+        result = evidence.scan_snapshot(tmp_path, capability)
+        assert result["entry_paths"] == []
+        assert result["evidence_paths"] == []
+        assert result["reuse_score"] == 0
+
+
+def test_manifest_only_dependency_evidence_cannot_be_strong(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps({"dependencies": {"@tanstack/react-table": "8.0.0", "next": "15.0.0"}}),
+        encoding="utf-8",
+    )
+
+    result = evidence.scan_snapshot(tmp_path, "data-table")
+
+    assert result["evidence_paths"]
+    assert result["reuse_score"] <= catalog_scoring.MANIFEST_ONLY_SCORE_CAP
+    assert result["synthesis"]["manifest_only"] is True
+    assert result["synthesis"]["capability_signal_score"] < catalog_scoring.STRONG_LABEL_SIGNAL
+
+
+@pytest.mark.parametrize(
+    ("capability", "writer"),
+    [
+        ("data-table", _write_nextjs_fixture),
+        ("trpc-router", _write_trpc_fixture),
+        ("command-palette", _write_command_palette_fixture),
+        ("admin-export", _write_admin_export_fixture),
+        ("background-jobs", _write_background_job_fixture),
+    ],
+)
+def test_evidence_scan_keeps_real_capability_specific_assets(
+    tmp_path: Path,
+    capability: str,
+    writer,
+) -> None:
+    writer(tmp_path)
+
+    result = evidence.scan_snapshot(tmp_path, capability)
+
+    assert result["entry_paths"]
+    assert result["evidence_paths"]
+    assert result["reuse_score"] >= 0.75
+    assert result["synthesis"]["capability_signal_score"] >= catalog_scoring.STRONG_LABEL_SIGNAL
+
+
 def test_ai_data_evidence_requires_specific_signal(tmp_path: Path) -> None:
     _write_nextjs_fixture(tmp_path)
 
@@ -666,12 +820,58 @@ def test_search_assets_uses_gemma_profile_and_ui_scores(tmp_path: Path) -> None:
         max_repos=2,
     )
 
-    assert results[0].candidate_id == good_asset_id
+    assert [result.candidate_id for result in results] == [good_asset_id]
     assert results[0].repo_id == "good/repo"
-    assert results[0].score > results[1].score
     assert results[0].task_signature == catalog.task_signature(
         "Find a reusable data table for a Next.js Tailwind dashboard"
     )
+
+
+def test_search_assets_skips_weak_label_even_with_good_profile(tmp_path: Path) -> None:
+    weak_root = tmp_path / "weak"
+    weak_root.mkdir()
+    _write_generic_admin_fixture(weak_root)
+    weak_repo_id = catalog.upsert_repository(
+        _repo_metadata("weak", "repo", topics=["nextjs", "admin"]),
+        "test",
+    )
+    weak_snapshot_id = catalog.upsert_snapshot(weak_repo_id, "weaksha", "main", weak_root)
+    weak_card = pipeline.build_repository_card(weak_root)
+    weak_card["gemma_profile"] = _profile("High quality app", ["src/app/admin/page.tsx"])
+    catalog.upsert_repository_card(weak_snapshot_id, weak_card)
+    catalog.upsert_asset(
+        weak_snapshot_id,
+        weak_repo_id,
+        "trpc-router",
+        {
+            "entry_paths": ["src/app/admin/page.tsx"],
+            "dependency_paths": ["package.json"],
+            "external_dependencies": ["next", "react"],
+            "evidence_paths": ["src/app/admin/page.tsx:1-3", "package.json:1-1"],
+            "reuse_score": 1.0,
+            "synthesis": {"ui_path_score": 0.9, "noise_penalty": 0.0},
+        },
+    )
+
+    strong_root = tmp_path / "strong"
+    strong_root.mkdir()
+    _write_trpc_fixture(strong_root)
+    strong_repo_id = catalog.upsert_repository(
+        _repo_metadata("strong", "repo", topics=["nextjs", "trpc"]),
+        "test",
+    )
+    strong_snapshot_id = catalog.upsert_snapshot(strong_repo_id, "strongsha", "main", strong_root)
+    catalog.upsert_repository_card(strong_snapshot_id, pipeline.build_repository_card(strong_root))
+    strong_asset_id = catalog.upsert_asset(
+        strong_snapshot_id,
+        strong_repo_id,
+        "trpc-router",
+        evidence.scan_snapshot(strong_root, "trpc-router"),
+    )
+
+    results = catalog.search_assets("Find a reusable tRPC router", max_repos=5)
+
+    assert [result.candidate_id for result in results] == [strong_asset_id]
 
 
 def test_search_assets_fail_closes_repos_without_freshness_metadata(tmp_path: Path) -> None:
@@ -760,7 +960,7 @@ def test_search_assets_sorts_by_raw_score_before_display_clamp(tmp_path: Path) -
 
     assert results[0].candidate_id == better_asset_id
     assert results[0].score == 1.0
-    assert results[1].score == 1.0
+    assert results[1].score < results[0].score
 
 
 def test_search_assets_prefers_command_combobox_over_generic_ui_noise(tmp_path: Path) -> None:
@@ -883,8 +1083,8 @@ def test_search_assets_prefers_real_background_job_paths_over_service_worker_noi
 
 
 async def _tool_names(module) -> set[str]:
-    tools = await module.mcp.get_tools()
-    return set(tools.keys())
+    tools = await module.mcp.list_tools()
+    return {tool.name for tool in tools}
 
 
 @pytest.mark.asyncio

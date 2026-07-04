@@ -9,7 +9,10 @@ def fastcontext_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "Read",
-                "description": "Read a UTF-8 text file under the workspace root by line range.",
+                "description": (
+                    "Read a UTF-8 text file under the workspace root by exact line range. "
+                    "Use this to verify source evidence before citing it."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -38,7 +41,10 @@ def fastcontext_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "Glob",
-                "description": "List files under the workspace root using ripgrep-style glob patterns.",
+                "description": (
+                    "List files under the workspace root using ripgrep-style glob patterns. "
+                    "Use this to discover candidate files before reading them."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -60,7 +66,10 @@ def fastcontext_tool_schemas() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "Grep",
-                "description": "Search text under the workspace root with ripgrep-compatible options.",
+                "description": (
+                    "Search text under the workspace root with ripgrep-compatible options. "
+                    "Use this to locate symbols, routes, config keys, and line anchors."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {

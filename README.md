@@ -114,10 +114,10 @@ Use this when relevant files are unknown and Codex would otherwise spend time on
 broad `grep`/read loops, when a task needs multi-file tracing, or when direct
 `rg` does not find enough context. Prefer direct `rg` for exact files, exact
 symbols, commands, test names, config keys, and tiny questions. FastContext uses
-LM Studio's OpenAI-compatible tool calling with read-only `Read`, `Glob`, and
-`Grep` tools, then returns file and line citations. Codex still reads the cited
-files, edits, and runs tests. If LM Studio or FastContext is unavailable, fall
-back to `rg`.
+LM Studio's OpenAI-compatible Responses endpoint with read-only `Read`, `Glob`,
+and `Grep` tools, then returns file and line citations. Codex still reads the
+cited files, edits, and runs tests. If LM Studio or FastContext is unavailable,
+fall back to `rg`.
 
 The default local exploration budget is currently seven turns. Use `--max-turns 8`
 when a first result is incomplete or when calibrating deeper local exploration.
@@ -220,7 +220,7 @@ This runs `lms load google/gemma-4-12b-qat --context-length 32768 --gpu max
 --identifier google/gemma-4-12b-qat` when Gemma is missing or loaded with a
 smaller context. The 32k context leaves headroom for task-specific assessment
 prompts that include repository metadata, the evidence ledger, Gemma profile
-data, and JSON completion. Source Scout's default LM Studio timeout is `120`
+data, and JSON responses. Source Scout's default LM Studio timeout is `120`
 seconds because local Gemma/FastContext calls can exceed 30 seconds on real
 assessment prompts.
 

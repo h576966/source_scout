@@ -60,11 +60,70 @@ def _write_budget_snapshot(root: Path) -> None:
 
 
 def _payload_message_text(payload: dict[str, Any]) -> str:
+    messages = payload.get("input") or payload.get("messages", [])
     return "\n".join(
         str(message.get("content") or "")
-        for message in payload.get("messages", [])
+        for message in messages
         if isinstance(message, dict)
     )
+
+
+def _response_message_json(content: str, *, response_id: str = "resp-1") -> dict[str, Any]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 0,
+        "model": "fastcontext-1.0-4b-rl",
+        "output": [
+            {
+                "id": f"{response_id}-message",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": content, "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": False,
+        "status": "completed",
+        "text": {"format": {"type": "text"}},
+    }
+
+
+def _response_tool_call_json(
+    tool: str,
+    args: dict[str, Any],
+    *,
+    call_id: str = "call-1",
+    response_id: str = "resp-1",
+) -> dict[str, Any]:
+    return _response_tool_calls_json([(tool, args, call_id)], response_id=response_id)
+
+
+def _response_tool_calls_json(
+    calls: list[tuple[str, dict[str, Any], str]],
+    *,
+    response_id: str = "resp-1",
+) -> dict[str, Any]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 0,
+        "model": "fastcontext-1.0-4b-rl",
+        "output": [
+            {
+                "id": f"{response_id}-function-call-{index}",
+                "type": "function_call",
+                "call_id": call_id,
+                "name": tool,
+                "arguments": json.dumps(args),
+                "status": "completed",
+            }
+            for index, (tool, args, call_id) in enumerate(calls, start=1)
+        ],
+        "parallel_tool_calls": True,
+        "status": "completed",
+        "text": {"format": {"type": "text"}},
+    }
 
 
 def _create_candidate(tmp_path: Path) -> str:
