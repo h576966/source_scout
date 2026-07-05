@@ -323,6 +323,12 @@ async def _evaluate_reuse_loop_task(
     )
     selected = results[0] if results else None
     selected_candidate_id = selected.candidate_id if selected is not None else None
+    selected_repo_id = selected.repo_id if selected is not None else None
+    selected_is_expected_or_acceptable = _is_expected_or_acceptable(
+        selected_repo_id,
+        expected_repo_ids=task["expected_repo_ids"],
+        acceptable_repo_ids=task["acceptable_repo_ids"],
+    )
 
     assessment_fields: dict[str, Any] = {
         "assessment_final_verdict": None,
@@ -347,8 +353,7 @@ async def _evaluate_reuse_loop_task(
             force_assessment=force_assessment,
             assessment_runtime=assessment_runtime,
         )
-        if assessment_fields["assessment_error"] is None:
-            bundle_fields = _reuse_loop_bundle_fields(selected_candidate_id, task_signature)
+        bundle_fields = _reuse_loop_bundle_fields(selected_candidate_id, task_signature)
 
     return {
         "id": task["id"],
@@ -360,6 +365,8 @@ async def _evaluate_reuse_loop_task(
         "expected_or_acceptable_repo_in_top_k": hit_rank is not None,
         "first_expected_or_acceptable_rank": hit_rank,
         "selected_candidate_id": selected_candidate_id,
+        "selected_repo_id": selected_repo_id,
+        "selected_is_expected_or_acceptable": selected_is_expected_or_acceptable,
         **assessment_fields,
         **bundle_fields,
     }
@@ -445,10 +452,13 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
 def _reuse_loop_metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(task_reports)
     top_k_hits = sum(1 for task in task_reports if task["expected_or_acceptable_repo_in_top_k"])
+    top_1_hits = sum(1 for task in task_reports if task["selected_is_expected_or_acceptable"])
     assessed = sum(1 for task in task_reports if task["assessment_final_verdict"] is not None)
     bundled = sum(1 for task in task_reports if task["bundle_path"])
     return {
         "task_count": total,
+        "top_1_expected_or_acceptable_hits": top_1_hits,
+        "top_1_expected_or_acceptable_hit_rate": round(top_1_hits / total, 4) if total else 0.0,
         "top_k_expected_or_acceptable_hits": top_k_hits,
         "top_k_expected_or_acceptable_hit_rate": round(top_k_hits / total, 4) if total else 0.0,
         "assessed_count": assessed,
@@ -473,11 +483,25 @@ def _expected_or_acceptable_rank(
     expected_repo_ids: list[str],
     acceptable_repo_ids: list[str],
 ) -> int | None:
-    labeled = set(expected_repo_ids) | set(acceptable_repo_ids)
     for candidate in returned:
-        if candidate["repo_id"] in labeled:
+        if _is_expected_or_acceptable(
+            str(candidate["repo_id"]),
+            expected_repo_ids=expected_repo_ids,
+            acceptable_repo_ids=acceptable_repo_ids,
+        ):
             return int(candidate["rank"])
     return None
+
+
+def _is_expected_or_acceptable(
+    repo_id: str | None,
+    *,
+    expected_repo_ids: list[str],
+    acceptable_repo_ids: list[str],
+) -> bool:
+    if repo_id is None:
+        return False
+    return repo_id in (set(expected_repo_ids) | set(acceptable_repo_ids))
 
 
 def _notable_validation_notes(notes: list[str]) -> list[str]:

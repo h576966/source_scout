@@ -34,17 +34,27 @@ def _evidence_file_path(evidence_path: str) -> str:
     return evidence_path.rsplit(":", 1)[0] if ":" in evidence_path else evidence_path
 
 
+def _unique_paths(paths: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for path in paths:
+        if path not in seen:
+            seen.add(path)
+            unique.append(path)
+    return unique
+
+
 def _recommended_read_order(
     *,
     copied_files: list[str],
     entry_paths: list[str],
     dependency_paths: list[str],
-    evidence_paths: list[str],
+    evidence_file_paths: list[str],
 ) -> list[str]:
     copied = set(copied_files)
     ordered: list[str] = []
     for path in [
-        *[_evidence_file_path(path) for path in evidence_paths],
+        *evidence_file_paths,
         *entry_paths,
         *dependency_paths,
     ]:
@@ -65,12 +75,21 @@ def create_source_bundle(candidate_id: str, task_signature: str) -> SourceBundle
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
     source_root = bundle_root / "source"
+    if source_root.exists():
+        if source_root.is_dir():
+            shutil.rmtree(source_root)
+        else:
+            source_root.unlink()
     source_root.mkdir(parents=True, exist_ok=True)
 
     snapshot_root = Path(str(asset["snapshot_path"]))
     entry_paths = [str(p) for p in asset["entry_paths"]]
     dependency_paths = [str(p) for p in asset["dependency_paths"]]
-    files = sorted(set(entry_paths + dependency_paths))
+    evidence_paths = [str(path) for path in asset["evidence_paths"]]
+    evidence_file_paths = _unique_paths(
+        [path for path in (_evidence_file_path(path) for path in evidence_paths) if path.strip()]
+    )
+    files = _unique_paths([*entry_paths, *dependency_paths, *evidence_file_paths])
     copied: list[str] = []
     missing: list[str] = []
     file_hashes: dict[str, str] = {}
@@ -86,12 +105,11 @@ def create_source_bundle(candidate_id: str, task_signature: str) -> SourceBundle
         file_hashes[rel_path] = _file_sha256(source)
 
     synthesis = asset["synthesis"]
-    evidence_paths = [str(path) for path in asset["evidence_paths"]]
     recommended_read_order = _recommended_read_order(
         copied_files=copied,
         entry_paths=entry_paths,
         dependency_paths=dependency_paths,
-        evidence_paths=evidence_paths,
+        evidence_file_paths=evidence_file_paths,
     )
     manifest: dict[str, Any] = {
         "candidate_id": candidate_id,
@@ -105,6 +123,7 @@ def create_source_bundle(candidate_id: str, task_signature: str) -> SourceBundle
         "missing_files": missing,
         "external_dependencies": asset["external_dependencies"],
         "evidence_paths": evidence_paths,
+        "evidence_file_paths": evidence_file_paths,
         "adaptation_notes": synthesis.get("adaptation_notes", []),
         "recommended_read_order": recommended_read_order,
         "file_hashes": file_hashes,
@@ -124,6 +143,7 @@ def create_source_bundle(candidate_id: str, task_signature: str) -> SourceBundle
         missing_files=missing,
         external_dependencies=[str(dep) for dep in asset["external_dependencies"]],
         evidence_paths=evidence_paths,
+        evidence_file_paths=evidence_file_paths,
         adaptation_notes=[str(note) for note in synthesis.get("adaptation_notes", [])],
         recommended_read_order=recommended_read_order,
         file_hashes=file_hashes,

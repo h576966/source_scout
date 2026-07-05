@@ -1046,6 +1046,7 @@ def _matching_bundle_manifest(
         "missing_files": manifest.get("missing_files", []),
         "recommended_read_order": manifest.get("recommended_read_order", []),
         "evidence_paths": manifest.get("evidence_paths", []),
+        "evidence_file_paths": manifest.get("evidence_file_paths", []),
         "external_dependencies": manifest.get("external_dependencies", []),
     }
 

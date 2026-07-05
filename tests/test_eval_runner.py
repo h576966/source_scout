@@ -310,12 +310,16 @@ async def test_reuse_loop_report_records_find_assess_bundle_fields(
     assert output_path.exists()
     assert report["metrics"]["task_count"] == 1
     assert report["metrics"]["top_k_expected_or_acceptable_hits"] == 1
+    assert report["metrics"]["top_1_expected_or_acceptable_hits"] == 1
+    assert report["metrics"]["top_1_expected_or_acceptable_hit_rate"] == 1.0
     assert report["metrics"]["selected_verdict_counts"] == {"select": 1}
     assert task["returned_candidates"] == [
         {"rank": 1, "candidate_id": asset_id, "repo_id": "good/repo"}
     ]
     assert task["expected_or_acceptable_repo_in_top_k"] is True
     assert task["selected_candidate_id"] == asset_id
+    assert task["selected_repo_id"] == "good/repo"
+    assert task["selected_is_expected_or_acceptable"] is True
     assert task["assessment_final_verdict"] == "select"
     assert task["reuse_score"] == 0.86
     assert task["confidence"] == 0.77
@@ -324,6 +328,44 @@ async def test_reuse_loop_report_records_find_assess_bundle_fields(
     assert task["copied_file_count"] == 2
     assert task["missing_file_count"] == 0
     assert task["notable_validation_notes"] == ["useful note", "second note"]
+
+
+@pytest.mark.asyncio
+async def test_reuse_loop_report_attempts_bundle_when_assessment_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset_id = _asset(
+        tmp_path,
+        repo_id="good/repo",
+        capability="data-table",
+        entry_paths=["components/data-table/data-table.tsx"],
+    )
+    suite = eval_runner.validate_suite(
+        {
+            "suite_id": "ui-reuse",
+            "description": "loop suite",
+            "tasks": [_task()],
+        }
+    )
+
+    async def fake_assess_candidate(**kwargs: Any) -> None:
+        assert kwargs["candidate_id"] == asset_id
+        raise RuntimeError("assessment failed")
+
+    monkeypatch.setattr(eval_runner.assessor, "assess_candidate", fake_assess_candidate)
+
+    report = await eval_runner.evaluate_reuse_loop_suite(suite, top_k=3, label="unit")
+
+    task = report["tasks"][0]
+    assert report["passed"] is False
+    assert report["metrics"]["assessment_error_count"] == 1
+    assert report["metrics"]["bundle_count"] == 1
+    assert report["metrics"]["bundle_error_count"] == 0
+    assert task["assessment_error"] == "assessment failed"
+    assert task["bundle_error"] is None
+    assert task["bundle_path"] is not None
+    assert Path(task["bundle_path"]).parts[-2:] == (asset_id, task["task_signature"])
 
 
 def test_eval_reuse_loop_cli_prints_summary(monkeypatch, capsys, tmp_path: Path) -> None:

@@ -820,6 +820,80 @@ def test_bundle_manifest_records_missing_files(tmp_path: Path) -> None:
     assert "missing.json" not in manifest["file_hashes"]
 
 
+def test_bundle_copies_evidence_only_files(tmp_path: Path) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    (snapshot_root / "src").mkdir()
+    (snapshot_root / "src" / "entry.ts").write_text("export const ok = true\n", encoding="utf-8")
+    (snapshot_root / "src" / "evidence.ts").write_text(
+        "export const evidence = true\n",
+        encoding="utf-8",
+    )
+
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+    asset_id = catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "route-handlers",
+        {
+            "entry_paths": ["src/entry.ts"],
+            "dependency_paths": [],
+            "external_dependencies": [],
+            "evidence_paths": ["src/evidence.ts:1-1"],
+            "synthesis": {},
+            "reuse_score": 0.8,
+        },
+    )
+
+    result = bundles.create_source_bundle(asset_id, "task123")
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+
+    assert "src/evidence.ts" in result.files
+    assert result.evidence_paths == ["src/evidence.ts:1-1"]
+    assert result.evidence_file_paths == ["src/evidence.ts"]
+    assert manifest["evidence_paths"] == ["src/evidence.ts:1-1"]
+    assert manifest["evidence_file_paths"] == ["src/evidence.ts"]
+    assert manifest["recommended_read_order"][0] == "src/evidence.ts"
+    assert (Path(result.bundle_path) / "source" / "src" / "evidence.ts").exists()
+
+
+def test_bundle_rerun_removes_stale_source_files(tmp_path: Path) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    (snapshot_root / "src").mkdir()
+    (snapshot_root / "src" / "entry.ts").write_text("export const ok = true\n", encoding="utf-8")
+
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+    asset_id = catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "route-handlers",
+        {
+            "entry_paths": ["src/entry.ts"],
+            "dependency_paths": [],
+            "external_dependencies": [],
+            "evidence_paths": ["src/entry.ts:1-1"],
+            "synthesis": {},
+            "reuse_score": 0.8,
+        },
+    )
+
+    first = bundles.create_source_bundle(asset_id, "task123")
+    stale = Path(first.bundle_path) / "source" / "stale.ts"
+    stale.write_text("export const stale = true\n", encoding="utf-8")
+
+    second = bundles.create_source_bundle(asset_id, "task123")
+
+    assert second.bundle_path == first.bundle_path
+    assert not stale.exists()
+    assert (Path(second.bundle_path) / "source" / "src" / "entry.ts").exists()
+    assert Path(second.manifest_path).exists()
+
+
 def test_bundle_rejects_unsafe_paths(tmp_path: Path) -> None:
     snapshot_root = tmp_path / "snapshot"
     snapshot_root.mkdir()

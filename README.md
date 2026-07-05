@@ -1,12 +1,15 @@
 # Source Scout
 
-Local-first MCP server and CLI for finding reusable TypeScript, JavaScript,
-Python, AI/data, Next.js, Node, and React source in public GitHub repositories.
+RLM-first local MCP server and CLI for finding reusable TypeScript,
+JavaScript, Python, AI/data, Next.js, Node, and React source in public GitHub
+repositories.
 
-The current direction is a **catalog-first reuse layer**, not generic GitHub
-search. The system scouts candidate repositories, stores reproducible local
-snapshots by commit SHA, extracts deterministic file-level evidence, and exposes
-small source bundles to coding agents.
+The current direction is an **RLM-first local source reuse assistant**, not
+generic GitHub search. The deterministic catalog search is broad retrieval; RLM
+reasoning is the future intelligence layer for project understanding, candidate
+comparison, reranking, bundle review, and eval diagnostics. Deterministic code
+still owns bounded file access, validation, hashing, persistence, traces,
+manifests, and eval metrics.
 
 See `docs/source_scout_direction.md` for the current product direction and
 `docs/complexity-budget.md` for scope boundaries and model role rules.
@@ -63,7 +66,9 @@ source-scout assess --candidate-id <asset_id> --task "Find a reusable route hand
 Responsibilities stay split:
 
 - Deterministic code validates paths, line ranges, commit SHA, evidence hashes,
-  scoring, verdicts, and persistence.
+  scoring, verdicts, bounded file access, traces, manifests, and persistence.
+- RLM is the primary reasoning layer for project understanding, candidate
+  comparison, reranking, bundle review, and eval diagnostics.
 - FastContext only scouts for additional file/line evidence. It never scores or
   decides reusability.
 - Gemma interprets the validated evidence for the task, returns dimensions and
@@ -315,13 +320,14 @@ Reuse-loop quality reports are written to
 `find_reusable_code -> assess_reusable_code -> get_source_bundle` shape over a
 small golden suite and record the returned candidates, whether an
 expected/acceptable repo appeared in top-k, the selected candidate, assessment
-verdict/score/confidence/evidence coverage, bundle path, copied/missing file
-counts, and notable validation notes. By default the command uses
-`--fastcontext-policy never --max-evidence-rounds 0` to keep the report focused
-on shortlist quality plus Gemma assessment and bundle creation. Treat failures
-as routing signals: missing expected repos point at shortlist/scoring issues,
-assessment errors or low evidence coverage point at assessment/evidence quality,
-and missing bundle files point at asset evidence or snapshot issues.
+verdict/score/confidence/evidence coverage, selected/top-1 hit rate, bundle
+path, copied/missing file counts, and notable validation notes. By default the
+command uses `--fastcontext-policy never --max-evidence-rounds 0` to keep the
+report focused on shortlist quality plus Gemma assessment and bundle creation.
+Treat failures as routing signals: missing expected repos point at
+shortlist/scoring issues, assessment errors or low evidence coverage point at
+assessment/evidence quality, and missing bundle files point at asset evidence or
+snapshot issues.
 
 ## Project Structure
 

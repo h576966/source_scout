@@ -126,7 +126,7 @@ async def assess_reusable_code(
 async def find_reusable_code(
     task: Annotated[
         str,
-        Field(description="Natural language UI reuse task, e.g. 'Next.js data table for admin dashboard'"),
+        Field(description="Natural language reuse task, e.g. 'Next.js data table for admin dashboard'"),
     ],
     project_path: Annotated[
         str | None,
