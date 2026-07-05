@@ -1,12 +1,9 @@
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import catalog
+from . import catalog, eval_support
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-GOLDEN_DIR = REPO_ROOT / "evals" / "golden"
 SUITE_ALIASES = {
     "ui-reuse": "ui_reuse_v1.json",
     "nextjs-backend": "nextjs_backend_v1.json",
@@ -17,13 +14,12 @@ UI_REUSE_PASSING_TOP3 = 8
 
 
 def load_suite(suite: str) -> dict[str, Any]:
-    path = _suite_path(suite)
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ValueError(f"Could not read eval suite '{suite}': {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Eval suite '{suite}' is not valid JSON: {exc}") from exc
+    parsed = eval_support.load_suite_json(
+        suite,
+        SUITE_ALIASES,
+        suite_label="eval",
+        title_label="Eval",
+    )
     return validate_suite(parsed)
 
 
@@ -57,9 +53,7 @@ def run_eval(
     loaded = load_suite(suite)
     report = evaluate_suite(loaded, top_k=top_k, label=label)
     path = output_path or default_report_path(str(loaded["suite_id"]), label)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    report["report_path"] = str(path)
+    eval_support.write_report(report, path)
     catalog.record_analysis_run(
         "eval",
         "completed" if report["passed"] else "failed",
@@ -94,20 +88,11 @@ def evaluate_suite(suite: dict[str, Any], top_k: int, label: str | None = None) 
 
 
 def default_report_path(suite_id: str, label: str | None = None) -> Path:
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    suffix = f"_{_safe_label(label)}" if label else ""
-    return catalog.ensure_home() / "eval_runs" / suite_id / f"{timestamp}{suffix}.json"
+    return eval_support.default_report_path("eval_runs", suite_id, label)
 
 
 def _suite_path(suite: str) -> Path:
-    candidate = Path(suite)
-    if candidate.exists():
-        return candidate
-    filename = SUITE_ALIASES.get(suite, suite)
-    path = GOLDEN_DIR / filename
-    if path.exists():
-        return path
-    raise ValueError(f"Unknown eval suite '{suite}'.")
+    return eval_support.suite_path(suite, SUITE_ALIASES, suite_label="eval")
 
 
 def _validate_task(task: dict[str, Any], index: int) -> dict[str, Any]:
@@ -300,6 +285,4 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _safe_label(label: str | None) -> str:
-    if not label:
-        return ""
-    return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in label)
+    return eval_support.safe_label(label)

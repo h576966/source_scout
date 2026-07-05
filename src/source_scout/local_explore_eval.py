@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import re
 import sys
@@ -9,10 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import catalog, fastcontext, lmstudio
+from . import eval_support, fastcontext, lmstudio
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-GOLDEN_DIR = REPO_ROOT / "evals" / "golden"
+REPO_ROOT = eval_support.REPO_ROOT
 SUITE_ALIASES = {
     "ernaering": "local_explore_ernaering_v1.json",
     "local-explore-ernaering": "local_explore_ernaering_v1.json",
@@ -44,13 +42,12 @@ class ReturnedCitation:
 
 
 def load_suite(suite: str) -> dict[str, Any]:
-    path = _suite_path(suite)
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ValueError(f"Could not read local exploration suite '{suite}': {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Local exploration suite '{suite}' is not valid JSON: {exc}") from exc
+    parsed = eval_support.load_suite_json(
+        suite,
+        SUITE_ALIASES,
+        suite_label="local exploration",
+        title_label="Local exploration",
+    )
     return validate_suite(parsed)
 
 
@@ -91,9 +88,7 @@ async def run_local_explore_eval(
         progress=progress,
     )
     path = output_path or default_report_path(str(loaded["suite_id"]), label)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    report["report_path"] = str(path)
+    eval_support.write_report(report, path)
     return report
 
 
@@ -168,20 +163,11 @@ async def evaluate_suite(
 
 
 def default_report_path(suite_id: str, label: str | None = None) -> Path:
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    suffix = f"_{_safe_label(label)}" if label else ""
-    return catalog.ensure_home() / "local_explore_eval_runs" / suite_id / f"{timestamp}{suffix}.json"
+    return eval_support.default_report_path("local_explore_eval_runs", suite_id, label)
 
 
 def _suite_path(suite: str) -> Path:
-    candidate = Path(suite)
-    if candidate.exists():
-        return candidate
-    filename = SUITE_ALIASES.get(suite, suite)
-    path = GOLDEN_DIR / filename
-    if path.exists():
-        return path
-    raise ValueError(f"Unknown local exploration suite '{suite}'.")
+    return eval_support.suite_path(suite, SUITE_ALIASES, suite_label="local exploration")
 
 
 def _validate_task(task: Any, index: int) -> dict[str, Any]:
@@ -882,6 +868,4 @@ def _reduction_ratio(manual_file_count: int, evidence_file_count: int) -> float 
 
 
 def _safe_label(label: str | None) -> str:
-    if not label:
-        return ""
-    return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in label)
+    return eval_support.safe_label(label)

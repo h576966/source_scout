@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
-from dataclasses import asdict
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -185,7 +185,16 @@ PERMISSIVE_LICENSES = {
     "Unlicense",
 }
 
-__all__ = ["AssessorError", "assess_candidate", "assessment_to_jsonable"]
+__all__ = ["AssessmentRuntime", "AssessorError", "assess_candidate", "assessment_to_jsonable"]
+
+ChatJsonFn = Callable[..., Awaitable[dict[str, Any]]]
+FastContextRefineFn = Callable[..., Awaitable[dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class AssessmentRuntime:
+    chat_json: ChatJsonFn | None = None
+    refine_candidate: FastContextRefineFn | None = None
 
 
 async def assess_candidate(
@@ -196,6 +205,7 @@ async def assess_candidate(
     max_evidence_rounds: int = 1,
     force: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
+    runtime: AssessmentRuntime | None = None,
 ) -> ReuseAssessmentResult:
     if not task.strip():
         raise AssessorError("task is required.")
@@ -211,7 +221,7 @@ async def assess_candidate(
             fastcontext_policy,
             fastcontext_status="not_requested",
         )
-        return await _assess_context(context, force=force, transport=transport)
+        return await _assess_context(context, force=force, transport=transport, runtime=runtime)
 
     if fastcontext_policy == "always":
         evidence_paths, events, status = await _fastcontext_evidence_for_always(
@@ -219,6 +229,7 @@ async def assess_candidate(
             task,
             max_evidence_rounds=max_evidence_rounds,
             transport=transport,
+            runtime=runtime,
         )
         context = _load_context(
             candidate_id,
@@ -228,7 +239,7 @@ async def assess_candidate(
             fastcontext_events=events,
             fastcontext_status=status,
         )
-        return await _assess_context(context, force=force, transport=transport)
+        return await _assess_context(context, force=force, transport=transport, runtime=runtime)
 
     initial_context = _load_context(
         candidate_id,
@@ -236,7 +247,7 @@ async def assess_candidate(
         fastcontext_policy,
         fastcontext_status="not_requested",
     )
-    initial = await _assess_context(initial_context, force=force, transport=transport)
+    initial = await _assess_context(initial_context, force=force, transport=transport, runtime=runtime)
     if max_evidence_rounds == 0 or not _has_eligible_fastcontext_request(initial):
         return initial
 
@@ -254,7 +265,7 @@ async def assess_candidate(
             fastcontext_events=existing_events,
             fastcontext_status="reused_existing",
         )
-        return await _assess_context(context, force=force, transport=transport)
+        return await _assess_context(context, force=force, transport=transport, runtime=runtime)
 
     evidence_paths, events, status = await _run_fastcontext_rounds(
         candidate_id,
@@ -262,6 +273,7 @@ async def assess_candidate(
         assessment=initial,
         max_evidence_rounds=max_evidence_rounds,
         transport=transport,
+        runtime=runtime,
     )
     context = _load_context(
         candidate_id,
@@ -271,7 +283,7 @@ async def assess_candidate(
         fastcontext_events=events,
         fastcontext_status=status,
     )
-    return await _assess_context(context, force=True, transport=transport)
+    return await _assess_context(context, force=True, transport=transport, runtime=runtime)
 
 
 async def _assess_context(
@@ -279,6 +291,7 @@ async def _assess_context(
     *,
     force: bool,
     transport: httpx.AsyncBaseTransport | None,
+    runtime: AssessmentRuntime | None,
 ) -> ReuseAssessmentResult:
     if not force:
         cached = catalog.get_latest_reuse_assessment(
@@ -317,8 +330,9 @@ async def _assess_context(
 
     raw_response: dict[str, Any] | None = None
     validation_errors: list[str] = []
+    chat_json = _runtime_chat_json(runtime)
     try:
-        raw_response = await lmstudio.chat_json(
+        raw_response = await chat_json(
             model_id=str(context["config"].gemma_model),
             messages=_assessment_messages(context),
             config=context["config"],
@@ -334,7 +348,7 @@ async def _assess_context(
     except Exception as exc:
         validation_errors = _validation_errors(exc)
         try:
-            repair_response = await lmstudio.chat_json(
+            repair_response = await chat_json(
                 model_id=str(context["config"].gemma_model),
                 messages=_repair_messages(context, raw_response, validation_errors),
                 config=context["config"],
@@ -376,6 +390,7 @@ async def _fastcontext_evidence_for_always(
     *,
     max_evidence_rounds: int,
     transport: httpx.AsyncBaseTransport | None,
+    runtime: AssessmentRuntime | None = None,
 ) -> tuple[list[str], list[dict[str, Any]], str]:
     if max_evidence_rounds == 0:
         return [], [], "not_requested"
@@ -399,6 +414,7 @@ async def _fastcontext_evidence_for_always(
         assessment=None,
         round_index=1,
         transport=transport,
+        runtime=runtime,
     )
     all_paths = _unique_evidence_paths([*existing_paths, *attempt_paths])
     events = [*existing_events, attempt_event]
@@ -416,6 +432,7 @@ async def _run_fastcontext_rounds(
     assessment: ReuseAssessmentResult,
     max_evidence_rounds: int,
     transport: httpx.AsyncBaseTransport | None,
+    runtime: AssessmentRuntime | None,
 ) -> tuple[list[str], list[dict[str, Any]], str]:
     evidence_paths: list[str] = []
     events: list[dict[str, Any]] = []
@@ -436,6 +453,7 @@ async def _run_fastcontext_rounds(
             assessment=assessment,
             round_index=round_index,
             transport=transport,
+            runtime=runtime,
         )
         events.append(event)
         if event["status"] == "completed":
@@ -455,9 +473,8 @@ async def _attempt_fastcontext_refinement(
     assessment: ReuseAssessmentResult | None,
     round_index: int,
     transport: httpx.AsyncBaseTransport | None,
+    runtime: AssessmentRuntime | None,
 ) -> tuple[list[str], dict[str, Any]]:
-    from . import fastcontext
-
     query = _focused_fastcontext_query(context, assessment)
     event: dict[str, Any] = {
         "round": round_index,
@@ -469,7 +486,7 @@ async def _attempt_fastcontext_refinement(
         "error": None,
     }
     try:
-        result = await fastcontext.refine_candidate(
+        result = await _runtime_refine_candidate(runtime)(
             candidate_id=candidate_id,
             task=query,
             transport=transport,
@@ -491,6 +508,20 @@ async def _attempt_fastcontext_refinement(
         }
     )
     return evidence_paths, event
+
+
+def _runtime_chat_json(runtime: AssessmentRuntime | None) -> ChatJsonFn:
+    if runtime is not None and runtime.chat_json is not None:
+        return runtime.chat_json
+    return lmstudio.chat_json
+
+
+def _runtime_refine_candidate(runtime: AssessmentRuntime | None) -> FastContextRefineFn:
+    if runtime is not None and runtime.refine_candidate is not None:
+        return runtime.refine_candidate
+    from . import fastcontext
+
+    return fastcontext.refine_candidate
 
 
 def _existing_fastcontext_evidence(

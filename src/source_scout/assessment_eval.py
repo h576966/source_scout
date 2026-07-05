@@ -8,10 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from . import assessment_rules, assessor, catalog, evidence_ledger, fastcontext, lmstudio
+from . import assessment_rules, assessor, catalog, eval_support, evidence_ledger, fastcontext, lmstudio
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-GOLDEN_DIR = REPO_ROOT / "evals" / "golden"
 SUITE_ALIASES = {
     "assessment-smoke": "assessment_smoke_v1.json",
 }
@@ -19,13 +17,12 @@ ANALYZER_VERSION = "assessment-eval-v1"
 
 
 def load_suite(suite: str) -> dict[str, Any]:
-    path = _suite_path(suite)
-    try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ValueError(f"Could not read assessment eval suite '{suite}': {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Assessment eval suite '{suite}' is not valid JSON: {exc}") from exc
+    parsed = eval_support.load_suite_json(
+        suite,
+        SUITE_ALIASES,
+        suite_label="assessment eval",
+        title_label="Assessment eval",
+    )
     return validate_suite(parsed)
 
 
@@ -59,9 +56,7 @@ async def run_assessment_eval(
             label=label,
             deterministic_only=deterministic_only,
         )
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    report["report_path"] = str(report_path)
+    eval_support.write_report(report, report_path)
     catalog.record_analysis_run(
         "eval-assess",
         "completed" if report["passed"] else "failed",
@@ -110,9 +105,7 @@ async def evaluate_suite(
 
 
 def default_report_path(suite_id: str, label: str | None = None) -> Path:
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    suffix = f"_{_safe_label(label)}" if label else ""
-    return catalog.ensure_home() / "assessment_eval_runs" / suite_id / f"{timestamp}{suffix}.json"
+    return eval_support.default_report_path("assessment_eval_runs", suite_id, label)
 
 
 async def _evaluate_task(task: dict[str, Any], *, deterministic_only: bool) -> dict[str, Any]:
@@ -124,8 +117,6 @@ async def _evaluate_task(task: dict[str, Any], *, deterministic_only: bool) -> d
     if not isinstance(fastcontext_config, dict):
         fastcontext_config = {}
 
-    original_chat_json = lmstudio.chat_json
-    original_refine_candidate = fastcontext.refine_candidate
     model_calls = 0
     fastcontext_calls = 0
 
@@ -151,8 +142,10 @@ async def _evaluate_task(task: dict[str, Any], *, deterministic_only: bool) -> d
             notes=_string_list(fastcontext_config.get("notes")),
         )
 
-    cast(Any, lmstudio).chat_json = fake_chat_json
-    cast(Any, fastcontext).refine_candidate = fake_refine_candidate
+    runtime = assessor.AssessmentRuntime(
+        chat_json=fake_chat_json,
+        refine_candidate=fake_refine_candidate,
+    )
     error: str | None = None
     result: Any = None
     try:
@@ -162,6 +155,7 @@ async def _evaluate_task(task: dict[str, Any], *, deterministic_only: bool) -> d
             fastcontext_policy=_policy(task, deterministic_only),
             max_evidence_rounds=int(task["max_evidence_rounds"]),
             force=bool(task["force"]),
+            runtime=runtime,
         )
         if bool(task["repeat_cached"]):
             result = await assessor.assess_candidate(
@@ -170,12 +164,10 @@ async def _evaluate_task(task: dict[str, Any], *, deterministic_only: bool) -> d
                 fastcontext_policy=_policy(task, deterministic_only),
                 max_evidence_rounds=int(task["max_evidence_rounds"]),
                 force=False,
+                runtime=runtime,
             )
     except Exception as exc:
         error = str(exc)
-    finally:
-        cast(Any, lmstudio).chat_json = original_chat_json
-        cast(Any, fastcontext).refine_candidate = original_refine_candidate
 
     run_status = _latest_assessment_run_status()
     expected = list(task["expected_final_verdicts"])
@@ -672,14 +664,7 @@ def _validate_task(raw: Any, index: int) -> dict[str, Any]:
 
 
 def _suite_path(suite: str) -> Path:
-    candidate = Path(suite)
-    if candidate.exists():
-        return candidate
-    filename = SUITE_ALIASES.get(suite, suite)
-    path = GOLDEN_DIR / filename
-    if path.exists():
-        return path
-    raise ValueError(f"Unknown assessment eval suite '{suite}'.")
+    return eval_support.suite_path(suite, SUITE_ALIASES, suite_label="assessment eval")
 
 
 def _license(value: Any) -> dict[str, str] | None:
@@ -698,13 +683,11 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _safe_label(label: str | None) -> str:
-    if not label:
-        return ""
-    return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in label)
+    return eval_support.safe_label(label)
 
 
 def _run_id(suite_id: str, label: str | None) -> str:
-    return f"{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{_safe_label(suite_id)}_{_safe_label(label)}"
+    return eval_support.run_id(suite_id, label)
 
 
 def _rate(value: int, total: int) -> float:

@@ -4,7 +4,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -19,6 +19,7 @@ DEFAULT_GEMMA_GPU = "max"
 DEFAULT_FASTCONTEXT_CONTEXT_LENGTH = 65_536
 DEFAULT_FASTCONTEXT_GPU = "max"
 LMS_EXE = r"C:\Users\Nikla\.lmstudio\bin\lms.exe"
+ModelRole = Literal["gemma", "fastcontext"]
 
 
 class LMStudioError(RuntimeError):
@@ -85,26 +86,11 @@ def load_fastcontext_model(
     context_length: int = DEFAULT_FASTCONTEXT_CONTEXT_LENGTH,
     gpu: str = DEFAULT_FASTCONTEXT_GPU,
 ) -> dict[str, Any]:
-    active = config or get_config()
-    state = model_inventory(active)["configured_models"].get("fastcontext", {})
-    if state.get("loaded"):
-        _run_lms(["unload", active.fastcontext_model], {"model_id": active.fastcontext_model})
-    return _run_lms(
-        [
-            "load",
-            active.fastcontext_model,
-            "--context-length",
-            str(context_length),
-            "--gpu",
-            gpu,
-            "--identifier",
-            active.fastcontext_model,
-        ],
-        {
-            "model_id": active.fastcontext_model,
-            "context_length": context_length,
-            "gpu": gpu,
-        },
+    return load_configured_model(
+        "fastcontext",
+        config=config,
+        context_length=context_length,
+        gpu=gpu,
     )
 
 
@@ -113,27 +99,64 @@ def load_gemma_model(
     context_length: int = DEFAULT_GEMMA_CONTEXT_LENGTH,
     gpu: str = DEFAULT_GEMMA_GPU,
 ) -> dict[str, Any]:
+    return load_configured_model(
+        "gemma",
+        config=config,
+        context_length=context_length,
+        gpu=gpu,
+    )
+
+
+def load_configured_model(
+    role: ModelRole,
+    config: LMStudioConfig | None = None,
+    context_length: int | None = None,
+    gpu: str | None = None,
+) -> dict[str, Any]:
     active = config or get_config()
-    state = model_inventory(active)["configured_models"].get("gemma", {})
+    model_id = model_id_for_role(active, role)
+    effective_context_length = (
+        context_length if context_length is not None else default_context_length_for_role(role)
+    )
+    effective_gpu = gpu if gpu is not None else default_gpu_for_role(role)
+    state = model_inventory(active)["configured_models"].get(role, {})
     if state.get("loaded"):
-        _run_lms(["unload", active.gemma_model], {"model_id": active.gemma_model})
+        _run_lms(["unload", model_id], {"model_id": model_id})
     return _run_lms(
         [
             "load",
-            active.gemma_model,
+            model_id,
             "--context-length",
-            str(context_length),
+            str(effective_context_length),
             "--gpu",
-            gpu,
+            effective_gpu,
             "--identifier",
-            active.gemma_model,
+            model_id,
         ],
         {
-            "model_id": active.gemma_model,
-            "context_length": context_length,
-            "gpu": gpu,
+            "model_id": model_id,
+            "context_length": effective_context_length,
+            "gpu": effective_gpu,
         },
     )
+
+
+def model_id_for_role(config: LMStudioConfig, role: ModelRole) -> str:
+    if role == "gemma":
+        return config.gemma_model
+    return config.fastcontext_model
+
+
+def default_context_length_for_role(role: ModelRole) -> int:
+    if role == "gemma":
+        return DEFAULT_GEMMA_CONTEXT_LENGTH
+    return DEFAULT_FASTCONTEXT_CONTEXT_LENGTH
+
+
+def default_gpu_for_role(role: ModelRole) -> str:
+    if role == "gemma":
+        return DEFAULT_GEMMA_GPU
+    return DEFAULT_FASTCONTEXT_GPU
 
 
 def model_inventory(config: LMStudioConfig | None = None) -> dict[str, Any]:
