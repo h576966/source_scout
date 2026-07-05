@@ -1,8 +1,10 @@
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from source_scout import bundles, capabilities, catalog, catalog_scoring, evidence, pipeline
 
@@ -752,8 +754,125 @@ def test_bundle_manifest_copies_evidence_files(tmp_path: Path) -> None:
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     assert manifest["candidate_id"] == asset_id
     assert manifest["task_signature"] == "task123"
-    assert "components/data-table/data-table.tsx" in manifest["files"]
+    assert "components/data-table/data-table.tsx" in manifest["copied_files"]
+    assert manifest["missing_files"] == []
     assert (Path(result.bundle_path) / "source" / "components/data-table/data-table.tsx").exists()
+
+
+def test_bundle_path_is_task_specific_and_includes_hashes_and_read_order(tmp_path: Path) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    _write_nextjs_fixture(snapshot_root)
+
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, pipeline.build_repository_card(snapshot_root))
+    asset_id = catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "data-table",
+        evidence.scan_snapshot(snapshot_root, "data-table"),
+    )
+
+    first = bundles.create_source_bundle(asset_id, "task-one")
+    second = bundles.create_source_bundle(asset_id, "task-two")
+    first_manifest = json.loads(Path(first.manifest_path).read_text(encoding="utf-8"))
+
+    copied_file = "components/data-table/data-table.tsx"
+    expected_hash = hashlib.sha256((snapshot_root / copied_file).read_bytes()).hexdigest()
+    assert Path(first.bundle_path).parts[-2:] == (asset_id, "task-one")
+    assert second.bundle_path != first.bundle_path
+    assert first.files == first_manifest["copied_files"]
+    assert copied_file in first.recommended_read_order
+    assert first_manifest["file_hashes"][copied_file] == expected_hash
+    assert first.file_hashes[copied_file] == expected_hash
+
+
+def test_bundle_manifest_records_missing_files(tmp_path: Path) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    (snapshot_root / "src").mkdir()
+    (snapshot_root / "src" / "entry.ts").write_text("export const ok = true\n", encoding="utf-8")
+
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+    asset_id = catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "route-handlers",
+        {
+            "entry_paths": ["src/entry.ts"],
+            "dependency_paths": ["missing.json"],
+            "external_dependencies": [],
+            "evidence_paths": ["src/entry.ts:1-1"],
+            "synthesis": {"adaptation_notes": []},
+            "reuse_score": 0.8,
+        },
+    )
+
+    result = bundles.create_source_bundle(asset_id, "task123")
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+
+    assert result.files == ["src/entry.ts"]
+    assert result.missing_files == ["missing.json"]
+    assert manifest["missing_files"] == ["missing.json"]
+    assert "missing.json" not in manifest["file_hashes"]
+
+
+def test_bundle_rejects_unsafe_paths(tmp_path: Path) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    (snapshot_root / "src").mkdir()
+    (snapshot_root / "src" / "entry.ts").write_text("export const ok = true\n", encoding="utf-8")
+    (tmp_path / "escape.ts").write_text("export const escape = true\n", encoding="utf-8")
+
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+    asset_id = catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "route-handlers",
+        {
+            "entry_paths": ["../escape.ts"],
+            "dependency_paths": [],
+            "external_dependencies": [],
+            "evidence_paths": [],
+            "synthesis": {},
+            "reuse_score": 0.8,
+        },
+    )
+
+    with pytest.raises(ToolError, match="Unsafe source path"):
+        bundles.create_source_bundle(asset_id, "task123")
+
+
+def test_bundle_rejects_unsafe_task_signature_path_segment(tmp_path: Path) -> None:
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    (snapshot_root / "src").mkdir()
+    (snapshot_root / "src" / "entry.ts").write_text("export const ok = true\n", encoding="utf-8")
+
+    repo_id = catalog.upsert_repository(_repo_metadata("owner", "repo"), "test")
+    snapshot_id = catalog.upsert_snapshot(repo_id, "abc123", "main", snapshot_root)
+    catalog.upsert_repository_card(snapshot_id, {"card_version": "repo-card-v1"})
+    asset_id = catalog.upsert_asset(
+        snapshot_id,
+        repo_id,
+        "route-handlers",
+        {
+            "entry_paths": ["src/entry.ts"],
+            "dependency_paths": [],
+            "external_dependencies": [],
+            "evidence_paths": ["src/entry.ts:1-1"],
+            "synthesis": {},
+            "reuse_score": 0.8,
+        },
+    )
+
+    with pytest.raises(ToolError, match="Unsafe bundle task_signature"):
+        bundles.create_source_bundle(asset_id, "../other-task")
 
 
 def test_search_assets_uses_gemma_profile_and_ui_scores(tmp_path: Path) -> None:

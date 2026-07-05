@@ -37,6 +37,7 @@ async def test_explore_local_code_tool_is_read_only_and_ephemeral(monkeypatch, t
     tools = {tool.name: tool for tool in await server.mcp.list_tools()}
     assert "explore_local_code" in tools
     assert tools["explore_local_code"].annotations.readOnlyHint is True
+    assert "Read-only local" in str(tools["explore_local_code"].description)
 
     result = await server.explore_local_code(
         "Find MCP tools",
@@ -78,6 +79,7 @@ async def test_assess_reusable_code_tool_is_registered_and_returns_cli_shape(
     tools = {tool.name: tool for tool in await server.mcp.list_tools()}
     assert "assess_reusable_code" in tools
     assert not bool(getattr(tools["assess_reusable_code"].annotations, "readOnlyHint", False))
+    assert "local assessment cache" in str(tools["assess_reusable_code"].description)
 
     result = await server.assess_reusable_code(
         "asset-1",
@@ -198,7 +200,13 @@ async def test_reuse_tools_carry_task_signature_and_record_outcomes(tmp_path: Pa
     bundle = await server.get_source_bundle(asset_id, result.task_signature)
     manifest = json.loads(Path(bundle.manifest_path).read_text(encoding="utf-8"))
     assert bundle.task_signature == result.task_signature
+    assert Path(bundle.bundle_path).parts[-2:] == (asset_id, result.task_signature)
+    assert bundle.files == ["components/data-table.tsx"]
+    assert bundle.recommended_read_order == ["components/data-table.tsx"]
+    assert "components/data-table.tsx" in bundle.file_hashes
     assert manifest["task_signature"] == result.task_signature
+    assert manifest["copied_files"] == bundle.files
+    assert manifest["recommended_read_order"] == bundle.recommended_read_order
 
     recorded = await server.record_reuse_outcome(
         asset_id,
@@ -221,6 +229,17 @@ async def test_reuse_tools_carry_task_signature_and_record_outcomes(tmp_path: Pa
     assert (result.task_signature, "returned", None) in rows
     assert (result.task_signature, "opened_bundle", None) in rows
     assert (result.task_signature, "selected", "usable") in rows
+
+
+@pytest.mark.asyncio
+async def test_reuse_tools_advertise_local_mutations() -> None:
+    tools = {tool.name: tool for tool in await server.mcp.list_tools()}
+
+    for name in ("find_reusable_code", "get_source_bundle", "record_reuse_outcome"):
+        assert not bool(getattr(tools[name].annotations, "readOnlyHint", False))
+        assert "local" in str(tools[name].description).lower()
+
+    assert "source bundle" in str(tools["get_source_bundle"].description).lower()
 
 
 @pytest.mark.asyncio

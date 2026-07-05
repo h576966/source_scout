@@ -75,6 +75,23 @@ def main() -> None:
     eval_parser.add_argument("--label", default=None)
     eval_parser.add_argument("--output", default=None)
 
+    reuse_loop_parser = subparsers.add_parser(
+        "eval-reuse-loop",
+        help="Run a compact quality report for find -> assess -> bundle",
+    )
+    reuse_loop_parser.add_argument("--suite", default="ui-reuse")
+    reuse_loop_parser.add_argument("--top-k", type=int, default=3)
+    reuse_loop_parser.add_argument("--label", default=None)
+    reuse_loop_parser.add_argument("--output", default=None)
+    reuse_loop_parser.add_argument("--limit-tasks", type=int, default=None)
+    reuse_loop_parser.add_argument(
+        "--fastcontext-policy",
+        choices=["auto", "always", "never"],
+        default="never",
+    )
+    reuse_loop_parser.add_argument("--max-evidence-rounds", type=int, default=0)
+    reuse_loop_parser.add_argument("--use-cache", action="store_true")
+
     local_eval_parser = subparsers.add_parser(
         "eval-local-explore",
         help="Run a FastContext local exploration golden eval suite",
@@ -226,6 +243,34 @@ def main() -> None:
 
         output_path = Path(args.output) if args.output else None
         result = run_eval(args.suite, args.top_k, label=args.label, output_path=output_path)
+        summary = {
+            "suite_id": result["suite_id"],
+            "label": result["label"],
+            "passed": result["passed"],
+            "metrics": result["metrics"],
+            "report_path": result["report_path"],
+        }
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return
+
+    if args.command == "eval-reuse-loop":
+        from pathlib import Path
+
+        from .eval_runner import run_reuse_loop_report
+
+        output_path = Path(args.output) if args.output else None
+        result = asyncio.run(
+            run_reuse_loop_report(
+                args.suite,
+                args.top_k,
+                label=args.label,
+                output_path=output_path,
+                limit_tasks=args.limit_tasks,
+                fastcontext_policy=args.fastcontext_policy,
+                max_evidence_rounds=args.max_evidence_rounds,
+                force_assessment=not args.use_cache,
+            )
+        )
         summary = {
             "suite_id": result["suite_id"],
             "label": result["label"],

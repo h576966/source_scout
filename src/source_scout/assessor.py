@@ -1017,7 +1017,7 @@ def _matching_bundle_manifest(
     commit_sha: str,
     snapshot_path: Path,
 ) -> dict[str, Any] | None:
-    manifest_path = catalog.bundle_path(candidate_id) / "bundle.json"
+    manifest_path = catalog.bundle_path(candidate_id, task_signature) / "bundle.json"
     if not manifest_path.exists():
         return None
     try:
@@ -1042,7 +1042,9 @@ def _matching_bundle_manifest(
         "candidate_id": manifest.get("candidate_id"),
         "task_signature": manifest.get("task_signature"),
         "commit_sha": manifest.get("commit_sha"),
-        "files": manifest.get("files", []),
+        "copied_files": manifest.get("copied_files", manifest.get("files", [])),
+        "missing_files": manifest.get("missing_files", []),
+        "recommended_read_order": manifest.get("recommended_read_order", []),
         "evidence_paths": manifest.get("evidence_paths", []),
         "external_dependencies": manifest.get("external_dependencies", []),
     }

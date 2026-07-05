@@ -44,9 +44,12 @@ class SourceBundleResult:
     bundle_path: str
     manifest_path: str
     files: list[str] = field(default_factory=list)
+    missing_files: list[str] = field(default_factory=list)
     external_dependencies: list[str] = field(default_factory=list)
     evidence_paths: list[str] = field(default_factory=list)
     adaptation_notes: list[str] = field(default_factory=list)
+    recommended_read_order: list[str] = field(default_factory=list)
+    file_hashes: dict[str, str] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 

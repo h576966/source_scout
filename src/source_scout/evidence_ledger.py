@@ -114,7 +114,7 @@ def build_candidate_evidence_ledger(
     notes: list[str] = []
     if include_bundle_manifest:
         manifest_source, manifest_notes = source_from_bundle_manifest(
-            catalog.bundle_path(candidate_id) / "bundle.json",
+            catalog.bundle_path(candidate_id, task_signature) / "bundle.json",
             candidate_id=candidate_id,
             commit_sha=str(asset["commit_sha"]),
             snapshot_root=Path(str(asset["snapshot_path"])),

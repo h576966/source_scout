@@ -300,6 +300,7 @@ Golden catalog evals:
 ```powershell
 source-scout eval --suite ui-reuse --top-k 5 --label local-ui-check
 source-scout eval --suite nextjs-backend --top-k 5 --label local-backend-check
+source-scout eval-reuse-loop --suite ui-reuse --top-k 3 --limit-tasks 3 --label local-loop-check
 source-scout eval-local-explore --suite source-scout --max-turns 7 --label local-fastcontext-check
 source-scout eval-assess --suite assessment-smoke --label local-assessment-check
 ```
@@ -308,6 +309,19 @@ Eval reports are written to `.source_scout/eval_runs/<suite_id>/`. They measure
 top-1/top-3/top-5 hits, MRR, avoid-repo violations, and evidence constraint
 failures against tracked golden tasks in `evals/golden/`. Local exploration eval
 reports are written to `.source_scout/local_explore_eval_runs/<suite_id>/`.
+
+Reuse-loop quality reports are written to
+`.source_scout/reuse_loop_reports/<suite_id>/`. They run the active
+`find_reusable_code -> assess_reusable_code -> get_source_bundle` shape over a
+small golden suite and record the returned candidates, whether an
+expected/acceptable repo appeared in top-k, the selected candidate, assessment
+verdict/score/confidence/evidence coverage, bundle path, copied/missing file
+counts, and notable validation notes. By default the command uses
+`--fastcontext-policy never --max-evidence-rounds 0` to keep the report focused
+on shortlist quality plus Gemma assessment and bundle creation. Treat failures
+as routing signals: missing expected repos point at shortlist/scoring issues,
+assessment errors or low evidence coverage point at assessment/evidence quality,
+and missing bundle files point at asset evidence or snapshot issues.
 
 ## Project Structure
 

@@ -31,6 +31,10 @@ DEFAULT_MCP_TOOL_NAMES = (
 
 
 @mcp.tool(
+    description=(
+        "Read-only local FastContext exploration. Finds relevant files and line ranges in a local "
+        "project without writing Source Scout catalog state."
+    ),
     annotations={"readOnlyHint": True},
 )
 async def explore_local_code(
@@ -61,7 +65,13 @@ async def explore_local_code(
         raise ToolError(str(exc))
 
 
-@mcp.tool()
+@mcp.tool(
+    description=(
+        "Assess a reusable-code candidate for a task. May write local assessment cache and analysis "
+        "run metadata in the Source Scout catalog."
+    ),
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
 async def assess_reusable_code(
     candidate_id: Annotated[
         str,
@@ -106,7 +116,13 @@ async def assess_reusable_code(
     return assessor.assessment_to_jsonable(result)
 
 
-@mcp.tool()
+@mcp.tool(
+    description=(
+        "Find reusable code candidates from the local Source Scout catalog. Records a local "
+        "'returned' reuse outcome for candidates it returns."
+    ),
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
 async def find_reusable_code(
     task: Annotated[
         str,
@@ -159,7 +175,13 @@ async def find_reusable_code(
     )
 
 
-@mcp.tool()
+@mcp.tool(
+    description=(
+        "Create a task-specific local source bundle for a candidate and record an 'opened_bundle' "
+        "reuse outcome in the local Source Scout catalog."
+    ),
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
 async def get_source_bundle(
     candidate_id: Annotated[
         str,
@@ -182,7 +204,10 @@ async def get_source_bundle(
     return result
 
 
-@mcp.tool()
+@mcp.tool(
+    description="Record a local reuse outcome for a candidate and task signature.",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+)
 async def record_reuse_outcome(
     candidate_id: Annotated[
         str,

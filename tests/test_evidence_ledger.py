@@ -214,7 +214,7 @@ def test_candidate_ledger_reads_existing_matching_bundle_manifest(tmp_path: Path
             "reuse_score": 0.8,
         },
     )
-    bundle_root = catalog.bundle_path(asset_id)
+    bundle_root = catalog.bundle_path(asset_id, "task123")
     bundle_root.mkdir(parents=True)
     (bundle_root / "bundle.json").write_text(
         json.dumps(

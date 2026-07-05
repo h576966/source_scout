@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from . import catalog, eval_support
+from . import assessor, bundles, catalog, eval_support
 
 SUITE_ALIASES = {
     "ui-reuse": "ui_reuse_v1.json",
@@ -11,6 +11,7 @@ SUITE_ALIASES = {
 }
 UI_REUSE_PASSING_TOP1 = 6
 UI_REUSE_PASSING_TOP3 = 8
+FastContextPolicy = Literal["auto", "always", "never"]
 
 
 def load_suite(suite: str) -> dict[str, Any]:
@@ -68,6 +69,48 @@ def run_eval(
     return report
 
 
+async def run_reuse_loop_report(
+    suite: str,
+    top_k: int,
+    label: str | None = None,
+    output_path: Path | None = None,
+    *,
+    limit_tasks: int | None = None,
+    fastcontext_policy: FastContextPolicy = "never",
+    max_evidence_rounds: int = 0,
+    force_assessment: bool = True,
+    assessment_runtime: assessor.AssessmentRuntime | None = None,
+) -> dict[str, Any]:
+    loaded = load_suite(suite)
+    report = await evaluate_reuse_loop_suite(
+        loaded,
+        top_k=top_k,
+        label=label,
+        limit_tasks=limit_tasks,
+        fastcontext_policy=fastcontext_policy,
+        max_evidence_rounds=max_evidence_rounds,
+        force_assessment=force_assessment,
+        assessment_runtime=assessment_runtime,
+    )
+    path = output_path or reuse_loop_report_path(str(loaded["suite_id"]), label)
+    eval_support.write_report(report, path)
+    catalog.record_analysis_run(
+        "eval-reuse-loop",
+        "completed" if report["passed"] else "failed",
+        {
+            "suite_id": loaded["suite_id"],
+            "label": label,
+            "top_k": top_k,
+            "limit_tasks": limit_tasks,
+            "fastcontext_policy": fastcontext_policy,
+            "max_evidence_rounds": max_evidence_rounds,
+            "metrics": report["metrics"],
+            "report_path": str(path),
+        },
+    )
+    return report
+
+
 def evaluate_suite(suite: dict[str, Any], top_k: int, label: str | None = None) -> dict[str, Any]:
     if top_k < 1:
         raise ValueError("top_k must be at least 1.")
@@ -87,8 +130,66 @@ def evaluate_suite(suite: dict[str, Any], top_k: int, label: str | None = None) 
     }
 
 
+async def evaluate_reuse_loop_suite(
+    suite: dict[str, Any],
+    *,
+    top_k: int,
+    label: str | None = None,
+    limit_tasks: int | None = None,
+    fastcontext_policy: FastContextPolicy = "never",
+    max_evidence_rounds: int = 0,
+    force_assessment: bool = True,
+    assessment_runtime: assessor.AssessmentRuntime | None = None,
+) -> dict[str, Any]:
+    if top_k < 1:
+        raise ValueError("top_k must be at least 1.")
+    if limit_tasks is not None and limit_tasks < 1:
+        raise ValueError("limit_tasks must be at least 1.")
+    if fastcontext_policy not in {"auto", "always", "never"}:
+        raise ValueError("fastcontext_policy must be one of: auto, always, never.")
+    if max_evidence_rounds < 0 or max_evidence_rounds > 2:
+        raise ValueError("max_evidence_rounds must be between 0 and 2.")
+
+    tasks = list(suite["tasks"])
+    if limit_tasks is not None:
+        tasks = tasks[:limit_tasks]
+    task_reports = [
+        await _evaluate_reuse_loop_task(
+            task,
+            top_k=top_k,
+            fastcontext_policy=fastcontext_policy,
+            max_evidence_rounds=max_evidence_rounds,
+            force_assessment=force_assessment,
+            assessment_runtime=assessment_runtime,
+        )
+        for task in tasks
+    ]
+    metrics = _reuse_loop_metrics(task_reports)
+    return {
+        "suite_id": suite["suite_id"],
+        "description": suite.get("description", ""),
+        "label": label,
+        "top_k": top_k,
+        "limit_tasks": limit_tasks,
+        "fastcontext_policy": fastcontext_policy,
+        "max_evidence_rounds": max_evidence_rounds,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "passed": (
+            int(metrics["top_k_expected_or_acceptable_hits"]) == int(metrics["task_count"])
+            and int(metrics["assessment_error_count"]) == 0
+            and int(metrics["bundle_error_count"]) == 0
+        ),
+        "metrics": metrics,
+        "tasks": task_reports,
+    }
+
+
 def default_report_path(suite_id: str, label: str | None = None) -> Path:
     return eval_support.default_report_path("eval_runs", suite_id, label)
+
+
+def reuse_loop_report_path(suite_id: str, label: str | None = None) -> Path:
+    return eval_support.default_report_path("reuse_loop_reports", suite_id, label)
 
 
 def _suite_path(suite: str) -> Path:
@@ -195,6 +296,130 @@ def _evaluate_task(task: dict[str, Any], top_k: int) -> dict[str, Any]:
     }
 
 
+async def _evaluate_reuse_loop_task(
+    task: dict[str, Any],
+    *,
+    top_k: int,
+    fastcontext_policy: FastContextPolicy,
+    max_evidence_rounds: int,
+    force_assessment: bool,
+    assessment_runtime: assessor.AssessmentRuntime | None,
+) -> dict[str, Any]:
+    task_text = str(task["task"])
+    task_signature = catalog.task_signature(task_text)
+    results = catalog.search_assets(task_text, max_repos=top_k)
+    returned = [
+        {
+            "rank": rank,
+            "candidate_id": candidate.candidate_id,
+            "repo_id": candidate.repo_id,
+        }
+        for rank, candidate in enumerate(results, start=1)
+    ]
+    hit_rank = _expected_or_acceptable_rank(
+        returned,
+        expected_repo_ids=task["expected_repo_ids"],
+        acceptable_repo_ids=task["acceptable_repo_ids"],
+    )
+    selected = results[0] if results else None
+    selected_candidate_id = selected.candidate_id if selected is not None else None
+
+    assessment_fields: dict[str, Any] = {
+        "assessment_final_verdict": None,
+        "reuse_score": None,
+        "confidence": None,
+        "evidence_coverage": None,
+        "notable_validation_notes": [],
+        "assessment_error": None,
+    }
+    bundle_fields: dict[str, Any] = {
+        "bundle_path": None,
+        "copied_file_count": 0,
+        "missing_file_count": 0,
+        "bundle_error": None,
+    }
+    if selected_candidate_id is not None:
+        assessment_fields = await _reuse_loop_assessment_fields(
+            candidate_id=selected_candidate_id,
+            task=task_text,
+            fastcontext_policy=fastcontext_policy,
+            max_evidence_rounds=max_evidence_rounds,
+            force_assessment=force_assessment,
+            assessment_runtime=assessment_runtime,
+        )
+        if assessment_fields["assessment_error"] is None:
+            bundle_fields = _reuse_loop_bundle_fields(selected_candidate_id, task_signature)
+
+    return {
+        "id": task["id"],
+        "task": task_text,
+        "task_signature": task_signature,
+        "expected_repo_ids": task["expected_repo_ids"],
+        "acceptable_repo_ids": task["acceptable_repo_ids"],
+        "returned_candidates": returned,
+        "expected_or_acceptable_repo_in_top_k": hit_rank is not None,
+        "first_expected_or_acceptable_rank": hit_rank,
+        "selected_candidate_id": selected_candidate_id,
+        **assessment_fields,
+        **bundle_fields,
+    }
+
+
+async def _reuse_loop_assessment_fields(
+    *,
+    candidate_id: str,
+    task: str,
+    fastcontext_policy: FastContextPolicy,
+    max_evidence_rounds: int,
+    force_assessment: bool,
+    assessment_runtime: assessor.AssessmentRuntime | None,
+) -> dict[str, Any]:
+    try:
+        assessment = await assessor.assess_candidate(
+            candidate_id=candidate_id,
+            task=task,
+            fastcontext_policy=fastcontext_policy,
+            max_evidence_rounds=max_evidence_rounds,
+            force=force_assessment,
+            runtime=assessment_runtime,
+        )
+    except Exception as exc:
+        return {
+            "assessment_final_verdict": None,
+            "reuse_score": None,
+            "confidence": None,
+            "evidence_coverage": None,
+            "notable_validation_notes": [],
+            "assessment_error": str(exc),
+        }
+    return {
+        "assessment_final_verdict": str(assessment.final_verdict),
+        "reuse_score": float(assessment.reuse_score),
+        "confidence": float(assessment.confidence),
+        "evidence_coverage": float(assessment.evidence_coverage),
+        "notable_validation_notes": _notable_validation_notes(assessment.validation_notes),
+        "assessment_error": None,
+    }
+
+
+def _reuse_loop_bundle_fields(candidate_id: str, task_signature: str) -> dict[str, Any]:
+    try:
+        bundle = bundles.create_source_bundle(candidate_id, task_signature)
+    except Exception as exc:
+        return {
+            "bundle_path": None,
+            "copied_file_count": 0,
+            "missing_file_count": 0,
+            "bundle_error": str(exc),
+        }
+    return {
+        "bundle_path": bundle.bundle_path,
+        "copied_file_count": len(bundle.files),
+        "missing_file_count": len(bundle.missing_files),
+        "bundle_error": None,
+    }
+
+
 def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(task_reports)
     top_1 = sum(1 for task in task_reports if task["top_1_hit"])
@@ -215,6 +440,55 @@ def _metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
         "avoid_repo_violations": avoid_violations,
         "evidence_constraint_failures": constraint_failures,
     }
+
+
+def _reuse_loop_metrics(task_reports: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(task_reports)
+    top_k_hits = sum(1 for task in task_reports if task["expected_or_acceptable_repo_in_top_k"])
+    assessed = sum(1 for task in task_reports if task["assessment_final_verdict"] is not None)
+    bundled = sum(1 for task in task_reports if task["bundle_path"])
+    return {
+        "task_count": total,
+        "top_k_expected_or_acceptable_hits": top_k_hits,
+        "top_k_expected_or_acceptable_hit_rate": round(top_k_hits / total, 4) if total else 0.0,
+        "assessed_count": assessed,
+        "selected_verdict_counts": _count_values(
+            [
+                str(task["assessment_final_verdict"])
+                for task in task_reports
+                if task["assessment_final_verdict"] is not None
+            ]
+        ),
+        "assessment_error_count": sum(1 for task in task_reports if task["assessment_error"]),
+        "bundle_count": bundled,
+        "bundle_error_count": sum(1 for task in task_reports if task["bundle_error"]),
+        "copied_file_count": sum(int(task["copied_file_count"]) for task in task_reports),
+        "missing_file_count": sum(int(task["missing_file_count"]) for task in task_reports),
+    }
+
+
+def _expected_or_acceptable_rank(
+    returned: list[dict[str, Any]],
+    *,
+    expected_repo_ids: list[str],
+    acceptable_repo_ids: list[str],
+) -> int | None:
+    labeled = set(expected_repo_ids) | set(acceptable_repo_ids)
+    for candidate in returned:
+        if candidate["repo_id"] in labeled:
+            return int(candidate["rank"])
+    return None
+
+
+def _notable_validation_notes(notes: list[str]) -> list[str]:
+    return [note for note in notes if note.strip()][:5]
+
+
+def _count_values(values: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
 def _passes_threshold(suite_id: str, metrics: dict[str, Any]) -> bool:

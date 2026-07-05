@@ -57,6 +57,14 @@ def _asset(
     owner, name = repo_id.split("/", 1)
     snapshot_root = tmp_path / owner / name
     snapshot_root.mkdir(parents=True)
+    for entry_path in entry_paths:
+        path = snapshot_root / entry_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("export const reusable = true\n", encoding="utf-8")
+    (snapshot_root / "package.json").write_text(
+        json.dumps({"dependencies": {dependency: "1.0.0" for dependency in dependencies or []}}),
+        encoding="utf-8",
+    )
     stored_repo_id = catalog.upsert_repository(
         {
             "owner": {"login": owner},
@@ -252,3 +260,125 @@ def test_eval_cli_writes_report(tmp_path: Path, monkeypatch, capsys) -> None:
     assert output_path.exists()
     report = json.loads(output_path.read_text(encoding="utf-8"))
     assert report["metrics"]["top_1_hits"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reuse_loop_report_records_find_assess_bundle_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset_id = _asset(
+        tmp_path,
+        repo_id="good/repo",
+        capability="data-table",
+        entry_paths=["components/data-table/data-table.tsx"],
+        dependencies=["@tanstack/react-table"],
+    )
+    suite = eval_runner.validate_suite(
+        {
+            "suite_id": "ui-reuse",
+            "description": "loop suite",
+            "tasks": [_task(required_dependencies_any=["@tanstack/react-table"])],
+        }
+    )
+
+    class FakeAssessment:
+        final_verdict = "select"
+        reuse_score = 0.86
+        confidence = 0.77
+        evidence_coverage = 0.66
+        validation_notes = ["useful note", "", "second note"]
+
+    async def fake_assess_candidate(**kwargs: Any) -> FakeAssessment:
+        assert kwargs["candidate_id"] == asset_id
+        assert kwargs["fastcontext_policy"] == "never"
+        assert kwargs["max_evidence_rounds"] == 0
+        return FakeAssessment()
+
+    monkeypatch.setattr(eval_runner.assessor, "assess_candidate", fake_assess_candidate)
+    output_path = tmp_path / "reuse-loop.json"
+
+    report = await eval_runner.run_reuse_loop_report(
+        str(_suite_file(tmp_path, suite["tasks"])),
+        top_k=3,
+        label="unit",
+        output_path=output_path,
+        limit_tasks=1,
+    )
+
+    task = report["tasks"][0]
+    assert output_path.exists()
+    assert report["metrics"]["task_count"] == 1
+    assert report["metrics"]["top_k_expected_or_acceptable_hits"] == 1
+    assert report["metrics"]["selected_verdict_counts"] == {"select": 1}
+    assert task["returned_candidates"] == [
+        {"rank": 1, "candidate_id": asset_id, "repo_id": "good/repo"}
+    ]
+    assert task["expected_or_acceptable_repo_in_top_k"] is True
+    assert task["selected_candidate_id"] == asset_id
+    assert task["assessment_final_verdict"] == "select"
+    assert task["reuse_score"] == 0.86
+    assert task["confidence"] == 0.77
+    assert task["evidence_coverage"] == 0.66
+    assert Path(task["bundle_path"]).parts[-2:] == (asset_id, task["task_signature"])
+    assert task["copied_file_count"] == 2
+    assert task["missing_file_count"] == 0
+    assert task["notable_validation_notes"] == ["useful note", "second note"]
+
+
+def test_eval_reuse_loop_cli_prints_summary(monkeypatch, capsys, tmp_path: Path) -> None:
+    import source_scout.__main__ as main_module
+
+    async def fake_run_reuse_loop_report(
+        suite: str,
+        top_k: int,
+        label: str | None = None,
+        output_path: Path | None = None,
+        *,
+        limit_tasks: int | None = None,
+        fastcontext_policy: str = "never",
+        max_evidence_rounds: int = 0,
+        force_assessment: bool = True,
+    ) -> dict[str, Any]:
+        assert suite == "ui-reuse"
+        assert top_k == 2
+        assert label == "unit"
+        assert output_path == tmp_path / "loop.json"
+        assert limit_tasks == 1
+        assert fastcontext_policy == "never"
+        assert max_evidence_rounds == 0
+        assert force_assessment is False
+        return {
+            "suite_id": "ui-reuse",
+            "label": label,
+            "passed": True,
+            "metrics": {"task_count": 1},
+            "report_path": str(output_path),
+        }
+
+    monkeypatch.setattr(eval_runner, "run_reuse_loop_report", fake_run_reuse_loop_report)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "source_scout",
+            "eval-reuse-loop",
+            "--suite",
+            "ui-reuse",
+            "--top-k",
+            "2",
+            "--label",
+            "unit",
+            "--output",
+            str(tmp_path / "loop.json"),
+            "--limit-tasks",
+            "1",
+            "--use-cache",
+        ],
+    )
+
+    main_module.main()
+
+    captured = capsys.readouterr()
+    assert '"suite_id": "ui-reuse"' in captured.out
+    assert '"task_count": 1' in captured.out

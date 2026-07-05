@@ -85,8 +85,24 @@ def snapshot_path(owner: str, repo: str, commit_sha: str) -> Path:
     return ensure_home() / "repos" / safe_repo_dir(owner, repo) / commit_sha
 
 
-def bundle_path(candidate_id: str) -> Path:
-    return ensure_home() / "bundles" / candidate_id
+def _safe_bundle_segment(value: str, label: str) -> str:
+    segment = str(value).strip()
+    if (
+        not segment
+        or Path(segment).is_absolute()
+        or "/" in segment
+        or "\\" in segment
+        or segment in {".", ".."}
+    ):
+        raise ValueError(f"Unsafe bundle {label}: {value}")
+    return segment
+
+
+def bundle_path(candidate_id: str, task_signature: str | None = None) -> Path:
+    root = ensure_home() / "bundles" / _safe_bundle_segment(candidate_id, "candidate_id")
+    if task_signature is None:
+        return root
+    return root / _safe_bundle_segment(task_signature, "task_signature")
 
 
 def reset_connection() -> None:
